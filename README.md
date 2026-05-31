@@ -7,11 +7,10 @@ ClassSync is a modern web application designed to automatically generate conflic
 At the heart of ClassSync is a highly optimized **Greedy Algorithm** implemented in Python, which is responsible for resolving the complex multidimensional constraints of timetable generation. 
 
 ### How it Works:
-1. **Prioritization (Heuristics):** The algorithm begins by sorting all unscheduled lessons based on a heuristic score. Lessons with the most rigid constraints (e.g., specific locked days, limited faculty availability, or specialized rooms) are prioritized and scheduled first.
-2. **Greedy Placement:** For each lesson, the algorithm greedily searches for the first available time slot that satisfies all hard constraints (no double-booking of rooms, teachers, or classrooms). 
+1. **Prioritization (Heuristics):** The algorithm begins by sorting all unscheduled lessons based on a heuristic score. Lessons with the most rigid constraints (e.g., highly loaded teachers like those teaching 30+ periods a week) are heavily prioritized and scheduled first on a blank grid.
+2. **Greedy Placement:** For each lesson, the algorithm greedily searches for the first available time slot that satisfies all hard constraints (no double-booking of rooms, teachers, or classrooms, and enforcing maximum occurrences per day). 
 3. **Constraint Checking:** During placement, the engine verifies cross-dimensional constraints in real-time using in-memory matrices to ensure O(1) lookups for conflict detection. 
-4. **Soft Constraints:** If multiple valid slots are found, soft constraints (like keeping a teacher's schedule compact or balancing subject distribution across the week) are evaluated to pick the *optimal* slot among valid candidates.
-5. **Backtracking Fallback:** If the greedy approach hits a dead end (a lesson cannot be placed anywhere), the algorithm can trigger localized backtracking to bump conflicting lessons and resolve the gridlock.
+4. **Min-Conflicts Local Search:** If the greedy approach leaves a few lessons unscheduled (e.g. a teacher is fully booked in all remaining free slots of a classroom), the engine enters a Local Search phase. It picks an unscheduled lesson, force-places it into an occupied slot (evicting the current lesson), and cascades the swap by finding a new free slot for the evicted lesson. This puzzle-solving approach perfectly slots in the remaining edge-cases to achieve 100% placement with zero conflicts.
 
 ## Technical Architecture
 

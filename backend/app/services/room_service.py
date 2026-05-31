@@ -4,14 +4,21 @@ from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from app.models.room import Room
 from app.models.timetable_entities import TimetableRoom
+from app.models.user import User, RoleType
 from app.utils.csv_utils import parse_csv_bytes, generate_short_name
 
 
 # ── Global CRUD ──────────────────────────────────────────────────────────────
 
-def get_global_rooms(user_id: UUID, db: Session):
-    """Return all global rooms belonging to this user."""
-    return db.query(Room).filter(Room.owner_id == user_id).order_by(Room.name).all()
+def get_global_rooms(current_user: User, db: Session, institution_id: str = None):
+    """Return global rooms. Admins see all (or filtered), institutions see their own."""
+    query = db.query(Room)
+    if current_user.role == RoleType.ADMIN:
+        if institution_id:
+            query = query.filter(Room.owner_id == institution_id)
+    else:
+        query = query.filter(Room.owner_id == current_user.id)
+    return query.order_by(Room.name).all()
 
 def create_room(user_id: UUID, payload_dict: dict, db: Session):
     """Create a new room in the global catalog."""
@@ -103,7 +110,7 @@ def bulk_import_rooms(user_id: UUID, content: bytes, db: Session):
         db.add(Room(
             name=name,
             short_name=short_name.upper(),
-            room_group=row.get("Room Group Name") or None,
+            building_name=row.get("Room Group Name") or None,
             owner_id=user_id,
             organization_id=None,
         ))

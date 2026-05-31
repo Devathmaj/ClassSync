@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from uuid import UUID
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, RoleType
 from app.schemas.lesson import LessonCreate, LessonUpdate, LessonOut
 from app.utils.auth import get_current_user
 from app.services import lesson_service
@@ -25,6 +25,8 @@ def create_lesson(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     return lesson_service.create_lesson(timetable_id, payload, db)
 
 @router.patch("/{timetable_id}/lessons/{lesson_id}", response_model=LessonOut)
@@ -35,6 +37,8 @@ def update_lesson(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return lesson_service.update_lesson(timetable_id, lesson_id, payload.dict(exclude_unset=True), db)
     except ValueError as e:
@@ -49,6 +53,8 @@ def replace_lesson(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return lesson_service.update_lesson(timetable_id, lesson_id, payload.dict(exclude_unset=True), db)
     except ValueError as e:
@@ -61,6 +67,8 @@ def delete_lesson(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         lesson_service.delete_lesson(timetable_id, lesson_id, db)
     except ValueError as e:

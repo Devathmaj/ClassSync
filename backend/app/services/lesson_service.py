@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from uuid import UUID
 from app.models.lesson import Lesson, LessonFaculty, LessonSubject
+from app.models.timetable_entities import TimetableClassroom, TimetableSubject, TimetableFaculty, TimetableRoom
 from app.schemas.lesson import LessonCreate
 
 def get_lessons(timetable_id: UUID, db: Session):
@@ -21,8 +22,21 @@ def create_lesson(timetable_id: UUID, payload: LessonCreate, db: Session):
 
     for subject_id in payload.subject_ids:
         db.add(LessonSubject(lesson_id=lesson.id, subject_id=subject_id))
+        if not db.query(TimetableSubject).filter_by(timetable_id=timetable_id, subject_id=subject_id).first():
+            db.add(TimetableSubject(timetable_id=timetable_id, subject_id=subject_id))
+
     for faculty_id in payload.faculty_ids:
         db.add(LessonFaculty(lesson_id=lesson.id, faculty_id=faculty_id))
+        if not db.query(TimetableFaculty).filter_by(timetable_id=timetable_id, faculty_id=faculty_id).first():
+            db.add(TimetableFaculty(timetable_id=timetable_id, faculty_id=faculty_id))
+
+    if payload.classroom_id:
+        if not db.query(TimetableClassroom).filter_by(timetable_id=timetable_id, classroom_id=payload.classroom_id).first():
+            db.add(TimetableClassroom(timetable_id=timetable_id, classroom_id=payload.classroom_id))
+
+    if hasattr(payload, 'room_id') and payload.room_id:
+        if not db.query(TimetableRoom).filter_by(timetable_id=timetable_id, room_id=payload.room_id).first():
+            db.add(TimetableRoom(timetable_id=timetable_id, room_id=payload.room_id))
 
     db.commit()
     db.refresh(lesson)

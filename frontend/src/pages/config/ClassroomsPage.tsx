@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { classroomApi, facultyApi } from '../../api';
-import type { Classroom, Faculty } from '../../types';
+import { classroomApi, facultyApi, timetableApi } from '../../api';
+import type { Classroom, Faculty, Timetable } from '../../types';
 import BulkImportModal from '../../components/bulk-import/BulkImportModal';
+import { downloadCSV } from '../../utils/export';
 
 interface ClassroomsPageProps {
   timetableId: string;
@@ -15,6 +16,7 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
   const [attached, setAttached] = useState<Classroom[]>([]);
   const [catalog, setCatalog] = useState<Classroom[]>([]);
   const [faculties, setFaculties] = useState<Faculty[]>([]);
+  const [timetable, setTimetable] = useState<Timetable | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogSearch, setCatalogSearch] = useState('');
 
@@ -30,10 +32,15 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
   const [attaching, setAttaching] = useState<string | null>(null);
 
   const loadData = async () => {
+    let tt = timetable;
+    if (!tt) {
+      tt = await timetableApi.get(timetableId);
+      setTimetable(tt);
+    }
     const [att, cat, facs] = await Promise.all([
       classroomApi.list(timetableId),
-      classroomApi.listGlobal(),
-      facultyApi.listGlobal(),
+      classroomApi.listGlobal(tt.owner_id),
+      facultyApi.listGlobal(tt.owner_id),
     ]);
     setAttached(att);
     setCatalog(cat);
@@ -77,7 +84,7 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
         await classroomApi.updateGlobal(editId, payload);
         await loadData();
       } else {
-        const created = await classroomApi.createGlobal(payload);
+        const created = await classroomApi.createGlobal(payload, timetable?.owner_id);
         await classroomApi.attach(timetableId, created.id).catch(() => {});
         await loadData();
       }
@@ -117,6 +124,17 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
       c.name.toLowerCase().includes(catalogSearch.toLowerCase()) ||
       c.short_name.toLowerCase().includes(catalogSearch.toLowerCase()))
   );
+
+  const handleExport = () => {
+    const headers = ['Class Name', 'Short Name', 'Class Teacher', 'Student Count'];
+    const data = catalog.map(c => [
+      c.name,
+      c.short_name,
+      c.class_teacher_id ? faculties.find(f => f.id === c.class_teacher_id)?.full_name || '' : '',
+      c.student_count?.toString() || ''
+    ]);
+    downloadCSV('classrooms', headers, data);
+  };
 
   return (
     <>
@@ -246,6 +264,9 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
                 value={catalogSearch}
                 onChange={e => setCatalogSearch(e.target.value)}
               />
+              <button className="btn btn-outline btn-sm" onClick={handleExport}>
+                📤 Export
+              </button>
               <button className="btn btn-outline btn-sm" onClick={() => setShowBulkImport(true)}>
                 📥 Bulk Import
               </button>
@@ -310,7 +331,7 @@ export default function ClassroomsPage({ timetableId, onBack }: ClassroomsPagePr
           { name: 'Class Teacher', required: false },
           { name: 'Student Count', required: false }
         ]}
-        onImport={(file) => classroomApi.bulkImportGlobal(file)}
+        onImport={(file) => classroomApi.bulkImportGlobal(file, timetable?.owner_id)}
         onSuccess={() => loadData()}
         onDownloadTemplate={() => {
           const csvContent = "data:text/csv;charset=utf-8,Class Name,Short Name,Class Teacher,Student Count\nGrade 10 A,10A,John Doe,30\nGrade 10 B,10B,,28";

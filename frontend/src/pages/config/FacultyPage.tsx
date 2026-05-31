@@ -1,21 +1,23 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { facultyApi } from '../../api';
-import type { Faculty } from '../../types';
+import { facultyApi, timetableApi } from '../../api';
+import type { Faculty, Timetable } from '../../types';
 import BulkImportModal from '../../components/bulk-import/BulkImportModal';
+import { downloadCSV } from '../../utils/export';
 
 interface FacultyPageProps {
   timetableId: string;
   onBack: () => void;
 }
 
-const emptyForm = { full_name: '', short_name: '', email: '', phone: '', designation: '', role: 'Member' };
+const emptyForm = { full_name: '', short_name: '', email: '', phone: '', designation: '', username: '', password: '', confirmPassword: '' };
 
 export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
   // Timetable-attached faculty
   const [attached, setAttached] = useState<Faculty[]>([]);
   // Global catalog
   const [catalog, setCatalog] = useState<Faculty[]>([]);
+  const [timetable, setTimetable] = useState<Timetable | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogSearch, setCatalogSearch] = useState('');
 
@@ -33,9 +35,14 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
   const [attaching, setAttaching] = useState<string | null>(null);
 
   const loadData = async () => {
+    let tt = timetable;
+    if (!tt) {
+      tt = await timetableApi.get(timetableId);
+      setTimetable(tt);
+    }
     const [att, cat] = await Promise.all([
       facultyApi.list(timetableId),
-      facultyApi.listGlobal(),
+      facultyApi.listGlobal(tt.owner_id),
     ]);
     setAttached(att);
     setCatalog(cat);
@@ -62,7 +69,7 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
   };
 
   const openEditForm = (f: Faculty) => {
-    setForm({ full_name: f.full_name, short_name: f.short_name, email: f.email || '', phone: f.phone || '', designation: f.designation || '', role: f.role });
+    setForm({ full_name: f.full_name, short_name: f.short_name, email: f.email || '', phone: f.phone || '', designation: f.designation || '', username: '', password: '', confirmPassword: '' });
     setEditId(f.id);
     setShowForm(true);
     setError('');
@@ -70,8 +77,16 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
 
   const handleSave = async () => {
     if (!form.full_name.trim()) { setError('Full name is required'); return; }
+    if (!editId && (!form.username.trim() || !form.password.trim())) { setError('Username and password are required'); return; }
+    if (!editId && form.password !== form.confirmPassword) { setError('Passwords do not match'); return; }
+
     setSaving(true); setError('');
     const payload: Record<string, unknown> = { ...form };
+    delete payload.confirmPassword;
+    if (editId) {
+      delete payload.username;
+      delete payload.password;
+    }
     if (!payload.email) delete payload.email;
     if (!payload.phone) delete payload.phone;
     if (!payload.designation) delete payload.designation;
@@ -82,7 +97,7 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
         await loadData();
       } else {
         // Create globally + auto-attach to timetable
-        const created = await facultyApi.createGlobal(payload);
+        const created = await facultyApi.createGlobal(payload, timetable?.owner_id);
         await facultyApi.attach(timetableId, created.id).catch(() => {});
         await loadData();
       }
@@ -122,6 +137,20 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
       f.full_name.toLowerCase().includes(catalogSearch.toLowerCase()) ||
       f.short_name.toLowerCase().includes(catalogSearch.toLowerCase()))
   );
+
+  const handleExport = () => {
+    const headers = ['Name', 'Username', 'Password', 'Short Name', 'Email', 'Phone', 'Designation'];
+    const data = catalog.map(f => [
+      f.full_name,
+      '', // empty username
+      '', // empty password
+      f.short_name,
+      f.email || '',
+      f.phone || '',
+      f.designation || ''
+    ]);
+    downloadCSV('faculty', headers, data);
+  };
 
   return (
     <>
@@ -174,14 +203,22 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
                     <label className="form-label">Designation</label>
                     <input id="faculty-designation" className="form-input" value={form.designation} onChange={e => setForm(f => ({ ...f, designation: e.target.value }))} placeholder="e.g. Head of Department" />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">Role</label>
-                    <select id="faculty-role" className="form-input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
-                      <option>Member</option>
-                      <option>Admin</option>
-                      <option>Guest</option>
-                    </select>
-                  </div>
+                  {!editId && (
+                    <>
+                      <div className="form-group">
+                        <label className="form-label">Username *</label>
+                        <input id="faculty-username" className="form-input" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} placeholder="e.g. janesmith" />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Password *</label>
+                        <input id="faculty-password" type="password" className="form-input" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Min 8 characters" />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Confirm Password *</label>
+                        <input id="faculty-confirm-password" type="password" className="form-input" value={form.confirmPassword} onChange={e => setForm(f => ({ ...f, confirmPassword: e.target.value }))} placeholder="Re-type password" />
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -255,6 +292,9 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
                 value={catalogSearch}
                 onChange={e => setCatalogSearch(e.target.value)}
               />
+              <button className="btn btn-outline btn-sm" onClick={handleExport}>
+                📤 Export
+              </button>
               <button className="btn btn-outline btn-sm" onClick={() => setShowBulkImport(true)}>
                 📥 Bulk Import
               </button>
@@ -316,16 +356,17 @@ export default function FacultyPage({ timetableId, onBack }: FacultyPageProps) {
         subtitle="Add multiple faculty members to your global catalog using a CSV file."
         expectedColumns={[
           { name: 'Name', required: true },
+          { name: 'Username', required: true },
+          { name: 'Password', required: true },
           { name: 'Short Name', required: false },
           { name: 'Email', required: false },
           { name: 'Phone', required: false },
-          { name: 'Designation', required: false },
-          { name: 'Role', required: false }
+          { name: 'Designation', required: false }
         ]}
-        onImport={(file) => facultyApi.bulkImportGlobal(file)}
+        onImport={(file) => facultyApi.bulkImportGlobal(file, timetable?.owner_id)}
         onSuccess={() => loadData()}
         onDownloadTemplate={() => {
-          const csvContent = "data:text/csv;charset=utf-8,Name,Short Name,Email,Phone,Designation,Role\nJane Doe,JDOE,jane@school.edu,555-0100,Senior Teacher,Member\nJohn Smith,JSM,john@school.edu,,Substitute,Guest";
+          const csvContent = "data:text/csv;charset=utf-8,Name,Username,Password,Short Name,Email,Phone,Designation\nJane Doe,janedoe,password123,JDOE,jane@school.edu,555-0100,Senior Teacher\nJohn Smith,johnsmith,password123,JSM,john@school.edu,,Substitute";
           const link = document.createElement("a");
           link.setAttribute("href", encodeURI(csvContent));
           link.setAttribute("download", "faculty_template.csv");

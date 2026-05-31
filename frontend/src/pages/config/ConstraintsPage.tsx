@@ -13,6 +13,7 @@ const TIPS = [
   { color: 'blue', title: 'Same Day Exclusion', body: 'Prevent two heavy subjects from happening on the same day (e.g. Math and Science).' },
   { color: 'purple', title: 'Class Teacher', body: 'Ensure that the first period of the day is taught by the class teacher.' },
   { color: 'green', title: 'Specific Days', body: 'Force a subject to only be scheduled on specific days (e.g. PE only on Thursday/Friday).' },
+  { color: 'indigo', title: 'Max One Per Day', body: 'Restrict a subject from appearing more than once per day.' },
 ];
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -113,6 +114,9 @@ export default function ConstraintsPage({ timetableId, onBack }: ConstraintsPage
     if (c.constraint_type === 'specific_days_subject') {
       return `${getSubjectName(c.subject_a_id)} restricted to ${c.days_of_week?.join(', ') || 'no days'}`;
     }
+    if (c.constraint_type === 'max_one_per_day') {
+      return c.subject_a_id ? `${getSubjectName(c.subject_a_id)}: max 1 per day` : `All subjects: max 1 per day`;
+    }
     return c.constraint_type;
   };
 
@@ -154,6 +158,7 @@ export default function ConstraintsPage({ timetableId, onBack }: ConstraintsPage
                         <option value="same_day_exclusion">Same Day Exclusion (A & B not same day)</option>
                         <option value="first_period_class_teacher">1st Period Matches Class Teacher</option>
                         <option value="specific_days_subject">Specific Days for Subject</option>
+                        <option value="max_one_per_day">Max One Per Day</option>
                       </select>
                     </div>
                     
@@ -226,14 +231,14 @@ export default function ConstraintsPage({ timetableId, onBack }: ConstraintsPage
                     {form.constraint_type !== 'first_period_class_teacher' && (
                       <>
                         <div className="form-group">
-                          <label className="form-label">{form.constraint_type === 'specific_days_subject' ? 'Subject' : 'Subject A'}</label>
+                          <label className="form-label">{form.constraint_type === 'specific_days_subject' || form.constraint_type === 'max_one_per_day' ? 'Subject' : 'Subject A'}</label>
                           <select className="form-input" value={form.subject_a_id} onChange={e => setForm(f => ({ ...f, subject_a_id: e.target.value }))}>
-                            <option value="">-- Select Subject {form.constraint_type !== 'specific_days_subject' && 'A'} --</option>
+                            <option value="">{form.constraint_type === 'max_one_per_day' ? '-- All Subjects --' : `-- Select Subject ${form.constraint_type !== 'specific_days_subject' ? 'A' : ''} --`}</option>
                             {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                           </select>
                         </div>
 
-                        {form.constraint_type !== 'specific_days_subject' && (
+                        {form.constraint_type !== 'specific_days_subject' && form.constraint_type !== 'max_one_per_day' && (
                           <div className="form-group">
                             <label className="form-label">Subject B</label>
                             <select className="form-input" value={form.subject_b_id} onChange={e => setForm(f => ({ ...f, subject_b_id: e.target.value }))}>

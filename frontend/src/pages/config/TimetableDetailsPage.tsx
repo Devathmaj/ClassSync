@@ -43,10 +43,11 @@ export default function TimetableDetailsPage({ timetableId, timetable, onBack, o
     setSaving(true); setError('');
     try {
       const updated = await timetableApi.update(timetableId, {
-        name, description: description || undefined,
-        session_name: sessionName || undefined,
-        session_start: sessionStart || undefined,
-        session_end: sessionEnd || undefined,
+        name, 
+        description: description || null,
+        session_name: sessionName || null,
+        session_start: sessionStart || null,
+        session_end: sessionEnd || null,
       });
       onSaved(updated);
       setSaved(true);
@@ -115,11 +116,17 @@ export default function TimetableDetailsPage({ timetableId, timetable, onBack, o
                 </div>
                 <div className="form-group">
                   <label className="form-label">Start Date</label>
-                  <input id="session-start" className="form-input" type="date" value={sessionStart} onChange={e => setSessionStart(e.target.value)} />
+                  <input id="session-start" className="form-input" type="date" value={sessionStart} onChange={e => {
+                    setSessionStart(e.target.value);
+                    if (!e.target.value) setSessionEnd('');
+                  }} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">End Date</label>
-                  <input id="session-end" className="form-input" type="date" value={sessionEnd} onChange={e => setSessionEnd(e.target.value)} />
+                  <input id="session-end" className="form-input" type="date" value={sessionEnd} onChange={e => {
+                    setSessionEnd(e.target.value);
+                    if (!e.target.value) setSessionStart('');
+                  }} />
                 </div>
               </div>
               {getDuration() && (

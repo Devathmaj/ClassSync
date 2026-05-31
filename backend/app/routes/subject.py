@@ -8,7 +8,7 @@ from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, RoleType
 from app.utils.auth import get_current_user
 from app.services import subject_service
 
@@ -45,20 +45,25 @@ class SubjectOut(BaseModel):
 
 @router.get("/subjects", response_model=List[SubjectOut], tags=["Subjects - Global"])
 def list_global_subjects(
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List all subjects/activities in the global catalog for the current user."""
-    return subject_service.get_global_subjects(current_user.id, db)
+    """List all subjects in the global catalog."""
+    return subject_service.get_global_subjects(current_user, db, institution_id)
 
 @router.post("/subjects", response_model=SubjectOut, status_code=status.HTTP_201_CREATED, tags=["Subjects - Global"])
 def create_global_subject(
     payload: SubjectCreate,
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Create a new subject/activity in the global catalog."""
-    return subject_service.create_subject(current_user.id, payload.dict(), db)
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target_owner = institution_id if (current_user.role == RoleType.ADMIN and institution_id) else current_user.id
+    return subject_service.create_subject(target_owner, payload.dict(), db)
 
 @router.put("/subjects/{subject_id}", response_model=SubjectOut, tags=["Subjects - Global"])
 def update_global_subject(
@@ -68,6 +73,8 @@ def update_global_subject(
     db: Session = Depends(get_db),
 ):
     """Update a global subject/activity."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return subject_service.update_subject(subject_id, payload.dict(exclude_unset=True), db)
     except ValueError as e:
@@ -80,6 +87,8 @@ def delete_global_subject(
     db: Session = Depends(get_db),
 ):
     """Delete a global subject/activity."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         subject_service.delete_subject(subject_id, db)
     except ValueError as e:
@@ -88,14 +97,18 @@ def delete_global_subject(
 @router.post("/subjects/bulk-import", tags=["Subjects - Global"])
 async def bulk_import_global_subjects(
     file: UploadFile = File(...),
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Bulk import subjects from CSV into the global catalog.
     CSV columns: Subject Name, Short Name, Description
     """
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target_owner = institution_id if (current_user.role == RoleType.ADMIN and institution_id) else current_user.id
     content = await file.read()
-    return subject_service.bulk_import_subjects(current_user.id, content, db)
+    return subject_service.bulk_import_subjects(target_owner, content, db)
 
 
 # ── Timetable Attach / Detach (/timetables/{id}/subjects) ────────────────────
@@ -117,6 +130,8 @@ def attach_subject_to_timetable(
     db: Session = Depends(get_db),
 ):
     """Attach an existing global subject/activity to a timetable."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return subject_service.attach_subject(timetable_id, subject_id, db)
     except ValueError as e:
@@ -132,6 +147,8 @@ def detach_subject_from_timetable(
     db: Session = Depends(get_db),
 ):
     """Detach a subject from a timetable (does not delete the subject globally)."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         subject_service.detach_subject(timetable_id, subject_id, db)
     except ValueError as e:

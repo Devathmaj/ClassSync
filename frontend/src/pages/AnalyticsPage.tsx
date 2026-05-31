@@ -6,12 +6,13 @@ import {
 } from 'recharts';
 import {
   timetableApi, lessonApi, subjectApi, facultyApi,
-  bellScheduleApi, timetableEntryApi, classroomApi,
+  bellScheduleApi, timetableEntryApi, classroomApi, usersApi
 } from '../api';
 import type {
   Timetable, Lesson, Subject, Faculty, BellSchedule,
   TimetableEntry, Classroom,
 } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 // ─── Colour palette for charts ────────────────────────────────────────────────
 const CHART_COLORS = [
@@ -834,13 +835,27 @@ export default function AnalyticsPage() {
   const [reports, setReports] = useState<ReportData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const { user } = useAuth();
+  const [hierarchy, setHierarchy] = useState<any[]>([]);
+  const [selectedInst, setSelectedInst] = useState<string>('');
 
   useEffect(() => {
+    if (user?.role === 'admin') {
+      usersApi.getHierarchy().then(data => {
+        setHierarchy(data);
+        if (data.length > 0) setSelectedInst(data[0].id);
+      }).catch(() => {});
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user?.role === 'admin' && !selectedInst) return;
     let cancelled = false;
 
     async function load() {
       try {
-        const timetables = await timetableApi.list();
+        setLoading(true);
+        const timetables = await timetableApi.list(selectedInst || undefined);
         if (cancelled) return;
         if (timetables.length === 0) { setLoading(false); return; }
 
@@ -873,7 +888,7 @@ export default function AnalyticsPage() {
 
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedInst, user]);
 
   // ── Global stats ────────────────────────────────────────────────────────────
   const globalTotalClasses = reports.reduce((s, r) => s + r.totalClasses, 0);
@@ -889,10 +904,25 @@ export default function AnalyticsPage() {
       {/* Top header */}
       <div className="top-header">
         <div>
-          <h1 className="header-greeting">Reports &amp; Insights</h1>
+          <h1 className="header-greeting">Reports & Insights</h1>
           <p className="header-sub">Detailed analytics for every timetable — all data is live and accurate</p>
         </div>
-        {loading && <span className="text-sm text-muted pulse">Loading data…</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {user?.role === 'admin' && (
+            <select
+              className="form-input"
+              style={{ width: 250 }}
+              value={selectedInst}
+              onChange={e => setSelectedInst(e.target.value)}
+            >
+              <option value="" disabled>Select Institution</option>
+              {hierarchy.map(inst => (
+                <option key={inst.id} value={inst.id}>{inst.full_name}</option>
+              ))}
+            </select>
+          )}
+          {loading && <span className="text-sm text-muted pulse">Loading data…</span>}
+        </div>
       </div>
 
       <div className="page-content" style={{ maxWidth: 1200 }}>

@@ -13,13 +13,22 @@ class PlanType(str, enum.Enum):
     MAX = "max"
 
 
+class RoleType(str, enum.Enum):
+    ADMIN = "admin"
+    INSTITUTION = "institution"
+    FACULTY = "faculty"
+
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(255), unique=True, nullable=False, index=True)
+    email = Column(String(255), nullable=True)
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=False)
+    role = Column(SAEnum(RoleType), default=RoleType.INSTITUTION, nullable=False)
+    must_change_password = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     plan = Column(SAEnum(PlanType), default=PlanType.FREE)

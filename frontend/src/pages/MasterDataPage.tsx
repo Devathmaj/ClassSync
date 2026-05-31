@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { facultyApi, subjectApi, classroomApi, roomApi } from '../api';
+import { facultyApi, subjectApi, classroomApi, roomApi, usersApi } from '../api';
 import type { Faculty, Subject, Classroom, Room } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export default function MasterDataPage() {
   const [faculty, setFaculty] = useState<Faculty[]>([]);
@@ -8,13 +9,23 @@ export default function MasterDataPage() {
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const [hierarchy, setHierarchy] = useState<any[]>([]);
+  const [selectedInst, setSelectedInst] = useState<string>(''); // empty means All Institutions
 
   useEffect(() => {
+    if (user?.role === 'admin') {
+      usersApi.getHierarchy().then(setHierarchy).catch(() => {});
+    }
+  }, [user]);
+
+  useEffect(() => {
+    setLoading(true);
     Promise.all([
-      facultyApi.listGlobal(),
-      subjectApi.listGlobal(),
-      classroomApi.listGlobal(),
-      roomApi.listGlobal()
+      facultyApi.listGlobal(selectedInst || undefined),
+      subjectApi.listGlobal(selectedInst || undefined),
+      classroomApi.listGlobal(selectedInst || undefined),
+      roomApi.listGlobal(selectedInst || undefined)
     ]).then(([f, s, c, r]) => {
       setFaculty(f);
       setSubjects(s);
@@ -25,7 +36,7 @@ export default function MasterDataPage() {
     }).finally(() => {
       setLoading(false);
     });
-  }, []);
+  }, [selectedInst]);
 
   return (
     <div className="fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
@@ -33,6 +44,22 @@ export default function MasterDataPage() {
         <div>
           <h1 className="header-greeting">Master Data</h1>
           <p className="header-sub">View your global catalog of Faculties, Subjects, Classrooms, and Rooms.</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {user?.role === 'admin' && (
+            <select
+              className="form-input"
+              style={{ width: 250 }}
+              value={selectedInst}
+              onChange={e => setSelectedInst(e.target.value)}
+            >
+              <option value="">All Institutions</option>
+              {hierarchy.map(inst => (
+                <option key={inst.id} value={inst.id}>{inst.full_name}</option>
+              ))}
+            </select>
+          )}
+          {loading && <span className="text-sm text-muted pulse">Loading…</span>}
         </div>
       </div>
       

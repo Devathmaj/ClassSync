@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { timetableApi, analyticsApi } from '../api';
 import type { Timetable, DashboardStats } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 
 interface DashboardPageProps {
@@ -13,6 +14,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [timetables, setTimetables] = useState<Timetable[]>([]);
+  const { user } = useAuth();
 
   useEffect(() => {
     analyticsApi.dashboard().then(setStats).catch(() => {});
@@ -26,18 +28,18 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
       <div className="page-content" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         <div style={{ maxWidth: 1000, width: '100%', display: 'flex', flexDirection: 'column', gap: 24 }}>
         {/* Stats Row */}
-        {stats && (
+        {(user?.role !== 'faculty' ? stats : true) && (
           <div className="stats-row">
             <div className="stat-card">
-              <div className="stat-value">{stats.total_timetables}</div>
+              <div className="stat-value">{user?.role === 'faculty' ? timetables.length : stats?.total_timetables}</div>
               <div className="stat-label">Total Timetables</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value" style={{ color: 'var(--color-green)' }}>{stats.published}</div>
+              <div className="stat-value" style={{ color: 'var(--color-green)' }}>{user?.role === 'faculty' ? timetables.filter(t => t.status === 'published').length : stats?.published}</div>
               <div className="stat-label">Published</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value" style={{ color: 'var(--color-amber)' }}>{stats.drafts}</div>
+              <div className="stat-value" style={{ color: 'var(--color-amber)' }}>{user?.role === 'faculty' ? timetables.filter(t => t.status === 'draft').length : stats?.drafts}</div>
               <div className="stat-label">Drafts</div>
             </div>
           </div>
@@ -53,7 +55,10 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                 { label: 'Reports & Analytics', icon: '📊', color: 'var(--color-orange)', page: 'analytics' },
                 { label: 'Manage Users', icon: '👥', color: 'var(--color-green)', page: 'users' },
                 { label: 'View Calendar', icon: '📆', color: 'var(--color-green)', page: 'calendar' },
-              ].map(action => (
+              ].filter(action => {
+                if (user?.role !== 'faculty') return true;
+                return action.page !== 'analytics' && action.page !== 'users';
+              }).map(action => (
                 <button
                   key={action.page}
                   id={`quick-action-${action.page}`}

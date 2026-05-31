@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { subjectApi } from '../../api';
-import type { Subject } from '../../types';
+import { subjectApi, timetableApi } from '../../api';
+import type { Subject, Timetable } from '../../types';
 import BulkImportModal from '../../components/bulk-import/BulkImportModal';
+import { downloadCSV } from '../../utils/export';
 
 interface SubjectsPageProps {
   timetableId: string;
@@ -14,6 +15,7 @@ const emptyForm = { name: '', short_name: '', description: '', display_color: '#
 export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps) {
   const [attached, setAttached] = useState<Subject[]>([]);
   const [catalog, setCatalog] = useState<Subject[]>([]);
+  const [timetable, setTimetable] = useState<Timetable | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogSearch, setCatalogSearch] = useState('');
 
@@ -29,9 +31,14 @@ export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps)
   const [attaching, setAttaching] = useState<string | null>(null);
 
   const loadData = async () => {
+    let tt = timetable;
+    if (!tt) {
+      tt = await timetableApi.get(timetableId);
+      setTimetable(tt);
+    }
     const [att, cat] = await Promise.all([
       subjectApi.list(timetableId),
-      subjectApi.listGlobal(),
+      subjectApi.listGlobal(tt.owner_id),
     ]);
     setAttached(att);
     setCatalog(cat);
@@ -73,7 +80,7 @@ export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps)
         await subjectApi.updateGlobal(editId, payload);
         await loadData();
       } else {
-        const created = await subjectApi.createGlobal(payload);
+        const created = await subjectApi.createGlobal(payload, timetable?.owner_id);
         await subjectApi.attach(timetableId, created.id).catch(() => {});
         await loadData();
       }
@@ -113,6 +120,16 @@ export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps)
       s.name.toLowerCase().includes(catalogSearch.toLowerCase()) ||
       s.short_name.toLowerCase().includes(catalogSearch.toLowerCase()))
   );
+
+  const handleExport = () => {
+    const headers = ['Subject Name', 'Short Name', 'Description'];
+    const data = catalog.map(s => [
+      s.name,
+      s.short_name,
+      s.description || ''
+    ]);
+    downloadCSV('subjects', headers, data);
+  };
 
   return (
     <>
@@ -244,6 +261,9 @@ export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps)
                 value={catalogSearch}
                 onChange={e => setCatalogSearch(e.target.value)}
               />
+              <button className="btn btn-outline btn-sm" onClick={handleExport}>
+                📤 Export
+              </button>
               <button className="btn btn-outline btn-sm" onClick={() => setShowBulkImport(true)}>
                 📥 Bulk Import
               </button>
@@ -307,7 +327,7 @@ export default function SubjectsPage({ timetableId, onBack }: SubjectsPageProps)
           { name: 'Short Name', required: false },
           { name: 'Description', required: false }
         ]}
-        onImport={(file) => subjectApi.bulkImportGlobal(file)}
+        onImport={(file) => subjectApi.bulkImportGlobal(file, timetable?.owner_id)}
         onSuccess={() => loadData()}
         onDownloadTemplate={() => {
           const csvContent = "data:text/csv;charset=utf-8,Subject Name,Short Name,Description\nMathematics,MATH,Core math subject\nPhysical Education,PE,Sports and activities";

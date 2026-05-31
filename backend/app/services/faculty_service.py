@@ -2,20 +2,46 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from uuid import UUID
+from app.models.user import User, RoleType
 from app.models.faculty import Faculty
 from app.models.timetable_entities import TimetableFaculty
 from app.utils.csv_utils import parse_csv_bytes, generate_short_name
+from app.utils.auth import hash_password
 
 
 # ── Global CRUD ──────────────────────────────────────────────────────────────
 
-def get_global_faculty(user_id: UUID, db: Session):
-    """Return all global faculty belonging to this user."""
-    return db.query(Faculty).filter(Faculty.owner_id == user_id).order_by(Faculty.full_name).all()
+def get_global_faculty(current_user: User, db: Session, institution_id: str = None):
+    """Return global faculty. Admins see all (or filtered by institution_id), institutions see their own."""
+    query = db.query(Faculty)
+    if current_user.role == RoleType.ADMIN:
+        if institution_id:
+            query = query.filter(Faculty.owner_id == institution_id)
+    else:
+        query = query.filter(Faculty.owner_id == current_user.id)
+    return query.order_by(Faculty.full_name).all()
 
 def create_faculty(user_id: UUID, payload_dict: dict, db: Session):
-    """Create a new faculty member in the global catalog."""
-    f = Faculty(**payload_dict, owner_id=user_id, organization_id=None)
+    """Create a new faculty member in the global catalog and an associated User account."""
+    username = payload_dict.pop("username")
+    password = payload_dict.pop("password")
+    
+    # Check if user already exists
+    if db.query(User).filter(User.username == username).first():
+        raise ValueError("Username already taken")
+        
+    new_user = User(
+        username=username,
+        email=payload_dict.get("email"),
+        hashed_password=hash_password(password),
+        full_name=payload_dict.get("full_name"),
+        role=RoleType.FACULTY,
+        must_change_password=False
+    )
+    db.add(new_user)
+    db.flush()
+    
+    f = Faculty(**payload_dict, owner_id=user_id, organization_id=None, user_id=new_user.id)
     db.add(f)
     db.commit()
     db.refresh(f)
@@ -85,29 +111,51 @@ def detach_faculty(timetable_id: UUID, faculty_id: UUID, db: Session):
 # ── Bulk Import ───────────────────────────────────────────────────────────────
 
 def bulk_import_faculty(user_id: UUID, content: bytes, db: Session):
-    """Import faculty from CSV into the global catalog. Skips duplicates by name."""
+    """Import faculty from CSV into the global catalog and create User accounts. Skips duplicates by username or name."""
     rows = parse_csv_bytes(content)
     created = []
     skipped = []
     for row in rows:
         name = row.get("Name", "").strip()
-        if not name:
+        username = row.get("Username", "").strip()
+        password = row.get("Password", "").strip()
+        
+        if not name or not username or not password:
+            skipped.append(name or username or "Unknown")
             continue
-        # Deduplicate by full_name + owner
+            
+        # Deduplicate by username globally or full_name + owner
+        if db.query(User).filter(User.username == username).first():
+            skipped.append(f"{name} (Username taken)")
+            continue
+            
         existing = db.query(Faculty).filter(
             Faculty.full_name == name, Faculty.owner_id == user_id
         ).first()
         if existing:
             skipped.append(name)
             continue
+            
+        new_user = User(
+            username=username,
+            email=row.get("Email") or None,
+            hashed_password=hash_password(password),
+            full_name=name,
+            role=RoleType.FACULTY,
+            must_change_password=False
+        )
+        db.add(new_user)
+        db.flush()
+            
         short_name = row.get("Short Name", "") or generate_short_name(name)
         f = Faculty(
             owner_id=user_id,
+            user_id=new_user.id,
             full_name=name,
             short_name=short_name.upper(),
             email=row.get("Email") or None,
             phone=row.get("Phone") or None,
-            role=row.get("Role", "Member"),
+            role="Member",
             designation=row.get("Designation") or None,
             organization_id=None,
         )

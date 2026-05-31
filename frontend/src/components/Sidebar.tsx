@@ -71,34 +71,42 @@ export default function Sidebar({ activePage, onNavigate }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="sidebar-nav">
-        {NAV_SECTIONS.map(section => (
-          <div key={section.label} style={{ display: 'flex', alignItems: 'center' }}>
-            <div className="nav-section-label" style={{ display: 'none' }}>{section.label}</div>
-            {section.items.map(item => (
-              <button
-                key={item.id}
-                id={`nav-${item.id}`}
-                className={`nav-item${activePage === item.id ? ' active' : ''}`}
-                onClick={() => handleNav(item.id)}
-              >
-                <span style={item.color ? { color: item.color } : {}}>{item.icon}</span>
-                <span className="nav-external">
-                  {item.label}
-                  {item.external && <span style={{ fontSize: 11 }}>↗</span>}
-                </span>
-              </button>
-            ))}
-          </div>
-        ))}
-      </nav>
+        {NAV_SECTIONS.map(section => {
+          const items = section.items.filter(item => {
+            if (user?.role === 'faculty' && ['users', 'master-data', 'analytics', 'settings'].includes(item.id)) return false;
+            return true;
+          });
+          
+          if (items.length === 0) return null;
 
+          return (
+            <div key={section.label} style={{ display: 'flex', alignItems: 'center' }}>
+              <div className="nav-section-label" style={{ display: 'none' }}>{section.label}</div>
+              {items.map(item => (
+                <button
+                  key={item.id}
+                  id={`nav-${item.id}`}
+                  className={`nav-item${activePage === item.id ? ' active' : ''}`}
+                  onClick={() => handleNav(item.id)}
+                >
+                  <span style={item.color ? { color: item.color } : {}}>{item.icon}</span>
+                  <span className="nav-external">
+                    {item.label}
+                    {item.external && <span style={{ fontSize: 11 }}>↗</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </nav>
 
       {/* Profile */}
       <div className="sidebar-profile">
         <div className="avatar">{user ? getInitials(user.full_name) : 'U'}</div>
         <div className="profile-info">
           <div className="profile-name">{user?.full_name || 'User'}</div>
-          <div className="profile-email">{user?.email}</div>
+          <div className="profile-email">@{user?.username}</div>
         </div>
       </div>
     </header>

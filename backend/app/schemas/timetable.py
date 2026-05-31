@@ -11,6 +11,7 @@ class TimetableCreate(BaseModel):
     session_name: Optional[str] = Field(None, max_length=100)
     session_start: Optional[date] = None
     session_end: Optional[date] = None
+    institution_id: Optional[str] = None
 
 
 class TimetableUpdate(BaseModel):
@@ -32,6 +33,7 @@ class TimetableOut(BaseModel):
     generation_warnings: Optional[list[dict]] = None
     created_at: datetime
     updated_at: datetime
+    owner_id: UUID
 
     class Config:
         from_attributes = True
@@ -46,6 +48,7 @@ class TimetableListOut(BaseModel):
     session_end: Optional[date] = None
     created_at: datetime
     updated_at: datetime
+    owner_id: UUID
 
     class Config:
         from_attributes = True

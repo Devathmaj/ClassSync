@@ -9,9 +9,10 @@ import type { EventInput, EventClickArg } from '@fullcalendar/core';
 import type { DateClickArg } from '@fullcalendar/interaction';
 import {
   timetableApi, timetableEntryApi, bellScheduleApi,
-  subjectApi, facultyApi, classroomApi, lessonApi,
+  subjectApi, facultyApi, classroomApi, lessonApi, usersApi
 } from '../api';
 import type { Timetable, Subject, Faculty, Classroom, BellSchedule, Lesson } from '../types';
+import { useAuth } from '../context/AuthContext';
 // ─── Day-of-week → FullCalendar index (0=Sunday) ────────────────────────────
 const DAY_MAP: Record<string, number> = {
   Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
@@ -47,6 +48,7 @@ interface TimetableBundle {
 // ─── Helper: FullCalendar endRecur is exclusive, so add 1 day to make session_end inclusive ───
 function safeDateStr(dateStr: string | null | undefined): string | undefined {
   if (!dateStr) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return undefined;
@@ -57,18 +59,32 @@ function safeDateStr(dateStr: string | null | undefined): string | undefined {
 function addOneDay(dateStr: string | null | undefined): string | undefined {
   if (!dateStr) return undefined;
   try {
-    const d = new Date(dateStr);
+    const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00Z`);
     if (isNaN(d.getTime())) return undefined;
-    d.setDate(d.getDate() + 1);
+    d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString().split('T')[0];
   } catch { return undefined; }
+}
+
+function getSessionBounds(timetable: Timetable) {
+  const currentYear = new Date().getFullYear();
+  const start = timetable.session_start || `${currentYear - 1}-01-01`;
+  const end = timetable.session_end || `${currentYear + 2}-12-31`;
+
+  return {
+    startRecur: safeDateStr(start),
+    endRecur: addOneDay(end)
+  };
 }
 
 // ─── Build recurring events from generated entries ────────────────────────────
 function buildEventsFromEntries(
   bundle: TimetableBundle,
   rawEntries: import('../types').TimetableEntry[],
+  user: import('../types').User | null,
 ): EventInput[] {
+  if (!bundle.hasSession) return [];
+  
   const { timetable, subjects, faculty, classrooms, bellSchedule, color } = bundle;
   const periodMap = new Map(
     (bellSchedule?.periods ?? []).map(p => [p.order, p])
@@ -81,6 +97,11 @@ function buildEventsFromEntries(
     const subject = entry.subject_id ? subjects.get(entry.subject_id) : null;
     const classroom = entry.classroom_id ? classrooms.get(entry.classroom_id) : null;
     const teacher = entry.faculty_id ? faculty.get(entry.faculty_id) : null;
+    
+    if (user?.role === 'faculty') {
+      if (!teacher || teacher.user_id !== user.id) return [];
+    }
+
     const subjectName = subject?.name ?? 'Class';
     const classroomName = classroom?.name ?? '';
     const bgColor = subject?.display_color && subject.display_color !== '#FFFFFF'
@@ -101,8 +122,7 @@ function buildEventsFromEntries(
       daysOfWeek: [dayIdx],
       startTime: period.start_time,
       endTime: period.end_time,
-      startRecur: safeDateStr(timetable.session_start),
-      endRecur: addOneDay(timetable.session_end),
+      ...getSessionBounds(timetable),
       backgroundColor: bgColor,
       borderColor: bgColor,
       textColor: '#fff',
@@ -112,7 +132,8 @@ function buildEventsFromEntries(
 }
 // ─── Build recurring events from lessons (not yet generated) ─────────────────
 // Each lesson has periods_per_week — we spread them evenly across working days
-function buildEventsFromLessons(bundle: TimetableBundle): EventInput[] {
+function buildEventsFromLessons(bundle: TimetableBundle, user: import('../types').User | null): EventInput[] {
+  if (!bundle.hasSession) return [];
   const { timetable, subjects, faculty, classrooms, bellSchedule, lessons, color } = bundle;
   if (!bellSchedule || bellSchedule.working_days.length === 0) return [];
   const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -132,6 +153,12 @@ function buildEventsFromLessons(bundle: TimetableBundle): EventInput[] {
     const lessonFaculty = lesson.faculty_ids
       .map(fid => faculty.get(fid))
       .filter(Boolean) as Faculty[];
+      
+    if (user?.role === 'faculty') {
+      const isMyLesson = lessonFaculty.some(f => f.user_id === user.id);
+      if (!isMyLesson) return;
+    }
+
     const classroom = lesson.classroom_id ? classrooms.get(lesson.classroom_id) : null;
     const subjectName = lessonSubjects.map(s => s.name).join(', ') || 'Class';
     const bgColor = lessonSubjects[0]?.display_color && lessonSubjects[0].display_color !== '#FFFFFF'
@@ -160,8 +187,7 @@ function buildEventsFromLessons(bundle: TimetableBundle): EventInput[] {
           daysOfWeek: [dayIdx],
           startTime: period.start_time,
           endTime: period.end_time,
-          startRecur: safeDateStr(timetable.session_start),
-          endRecur: addOneDay(timetable.session_end),
+          ...getSessionBounds(timetable),
           backgroundColor: bgColor,
           borderColor: bgColor,
           textColor: '#fff',
@@ -324,13 +350,30 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
+  const { user } = useAuth();
+  const [hierarchy, setHierarchy] = useState<any[]>([]);
+  const [selectedInst, setSelectedInst] = useState<string>('');
   const [popup, setPopup] = useState<{ meta: CalEventMeta; x: number; y: number } | null>(null);
+  const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
   const calRef = useRef<FullCalendar>(null);
+
   useEffect(() => {
+    if (user?.role === 'admin') {
+      usersApi.getHierarchy().then(data => {
+        setHierarchy(data);
+        if (data.length > 0) setSelectedInst(data[0].id);
+      }).catch(() => {});
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user?.role === 'admin' && !selectedInst) return;
+
     let cancelled = false;
     async function load() {
       try {
-        const timetables = await timetableApi.list();
+        setLoading(true);
+        const timetables = await timetableApi.list(selectedInst || undefined);
         if (cancelled) return;
         const loaded: TimetableBundle[] = [];
         const evts: EventInput[] = [];
@@ -358,9 +401,9 @@ export default function CalendarPage() {
             // Prefer entries (generated), else fall back to lessons
             let ttEvents: EventInput[];
             if (entries.length > 0) {
-              ttEvents = buildEventsFromEntries(bundle, entries);
+              ttEvents = buildEventsFromEntries(bundle, entries, user);
             } else {
-              ttEvents = buildEventsFromLessons(bundle);
+              ttEvents = buildEventsFromLessons(bundle, user);
             }
 
             if (!cancelled) {
@@ -375,15 +418,18 @@ export default function CalendarPage() {
           setBundles(loaded);
           setAllEvents(evts);
           setActiveIds(new Set(loaded.map(b => b.timetable.id)));
-          setLoading(false);
-          // Jump calendar to the earliest academic session start
+          
           const sessions = loaded
             .filter(b => b.timetable.session_start)
             .map(b => b.timetable.session_start as string)
             .sort();
           if (sessions.length > 0) {
-            setTimeout(() => calRef.current?.getApi().gotoDate(sessions[0]), 0);
+            setInitialDate(sessions[0]);
+          } else {
+            setInitialDate(undefined);
           }
+          
+          setLoading(false);
         }
       } catch (e) {
         if (!cancelled) {
@@ -394,7 +440,7 @@ export default function CalendarPage() {
     }
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedInst, user]);
   // Filtered events — only from active (ticked) timetables
   const visibleEvents = allEvents.filter(
     e => activeIds.has((e.extendedProps as CalEventMeta)?.timetableId)
@@ -432,7 +478,22 @@ export default function CalendarPage() {
             All timetables displayed as recurring events — session-bounded where configured
           </p>
         </div>
-        {loading && <span className="text-sm text-muted pulse">Loading…</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {user?.role === 'admin' && (
+            <select
+              className="form-input"
+              style={{ width: 250 }}
+              value={selectedInst}
+              onChange={e => setSelectedInst(e.target.value)}
+            >
+              <option value="" disabled>Select Institution</option>
+              {hierarchy.map(inst => (
+                <option key={inst.id} value={inst.id}>{inst.full_name}</option>
+              ))}
+            </select>
+          )}
+          {loading && <span className="text-sm text-muted pulse">Loading…</span>}
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 0, minHeight: 'calc(100vh - 73px)' }}>
@@ -524,7 +585,11 @@ export default function CalendarPage() {
               ⚠️ {error}
             </div>
           )}
-          {!loading && bundles.length === 0 ? (
+          {loading ? (
+            <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+              <span className="text-muted pulse" style={{ fontSize: 16 }}>Loading calendar events...</span>
+            </div>
+          ) : bundles.length === 0 ? (
             <div className="card" style={{ padding: 48, textAlign: 'center' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>📅</div>
               <h2 style={{ marginBottom: 8 }}>No Timetables Yet</h2>
@@ -570,6 +635,7 @@ export default function CalendarPage() {
               `}</style>
               <FullCalendar
                 ref={calRef}
+                initialDate={initialDate}
                 plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
                 initialView="dayGridMonth"
                 headerToolbar={{

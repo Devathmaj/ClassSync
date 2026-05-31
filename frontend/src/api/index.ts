@@ -28,7 +28,10 @@ async function request<T>(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(Array.isArray(err.detail) ? err.detail.join(', ') : err.detail || 'Request failed');
+    const detailStr = Array.isArray(err.detail)
+      ? err.detail.map((e: any) => `${e.loc && e.loc.length > 0 ? e.loc[e.loc.length - 1] + ': ' : ''}${e.msg}`).join(', ')
+      : err.detail || 'Request failed';
+    throw new Error(detailStr);
   }
 
   if (res.status === 204) return undefined as T;
@@ -43,16 +46,29 @@ const del = (path: string) => request<void>('DELETE', path);
 
 // ---- Auth ----
 export const authApi = {
-  register: (email: string, password: string, full_name: string) =>
-    post<import('../types').AuthTokens>('/auth/register', { email, password, full_name }),
-  login: (email: string, password: string) =>
-    post<import('../types').AuthTokens>('/auth/login', { email, password }),
+  login: (username: string, password: string) =>
+    post<import('../types').AuthTokens>('/auth/login', { username, password }),
+  changeCredentials: (username: string, new_password: string) =>
+    post<import('../types').AuthTokens>('/auth/change-credentials', { username, new_password }),
   me: () => get<import('../types').User>('/auth/me'),
+};
+
+export const usersApi = {
+  getHierarchy: () => get<any[]>('/users/hierarchy'),
+  createInstitution: (username: string, password: string, full_name: string, email?: string) =>
+    post<import('../types').User>('/users/institution', { username, password, full_name, email: email || undefined }),
+  createFaculty: (username: string, password: string, full_name: string, institution_id?: string, email?: string) => {
+    const url = institution_id ? `/users/faculty?institution_id=${institution_id}` : '/users/faculty';
+    return post<import('../types').User>(url, { username, password, full_name, email: email || undefined });
+  },
+  updateUser: (id: string, data: Partial<{ username: string; password?: string; full_name: string; email?: string }>) =>
+    request<import('../types').User>('PUT', `/users/${id}`, data),
+  deleteUser: (id: string) => del(`/users/${id}`),
 };
 
 // ---- Timetables ----
 export const timetableApi = {
-  list: () => get<import('../types').Timetable[]>('/timetables'),
+  list: (institutionId?: string) => get<import('../types').Timetable[]>(institutionId ? `/timetables?institution_id=${institutionId}` : '/timetables'),
   create: (data: Partial<import('../types').Timetable>) => post<import('../types').Timetable>('/timetables', data),
   get: (id: string) => get<import('../types').Timetable>(`/timetables/${id}`),
   update: (id: string, data: Partial<import('../types').Timetable>) =>
@@ -74,16 +90,21 @@ export const bellScheduleApi = {
 // Global catalog operations
 export const facultyApi = {
   // --- Global catalog ---
-  listGlobal: () => get<import('../types').Faculty[]>('/faculty'),
-  createGlobal: (data: Partial<import('../types').Faculty>) =>
-    post<import('../types').Faculty>('/faculty', data),
+  listGlobal: (institutionId?: string) => get<import('../types').Faculty[]>(institutionId ? `/faculty?institution_id=${institutionId}` : '/faculty'),
+  createGlobal: (data: Partial<import('../types').Faculty>, institutionId?: string) =>
+    post<import('../types').Faculty>(institutionId ? `/faculty?institution_id=${institutionId}` : '/faculty', data),
   updateGlobal: (id: string, data: Partial<import('../types').Faculty>) =>
     put<import('../types').Faculty>(`/faculty/${id}`, data),
   deleteGlobal: (id: string) => del(`/faculty/${id}`),
-  bulkImportGlobal: (file: File) => {
+  bulkImportGlobal: (file: File, institutionId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
-    return request<{ imported: number; skipped: number }>('POST', '/faculty/bulk-import', formData, true);
+    return request<{ imported: number; skipped: number }>(
+      'POST', 
+      institutionId ? `/faculty/bulk-import?institution_id=${institutionId}` : '/faculty/bulk-import', 
+      formData, 
+      true
+    );
   },
 
   // --- Timetable-scoped (attached list) ---
@@ -109,16 +130,21 @@ export const facultyApi = {
 // ---- Classrooms (Grades & Divisions) ----
 export const classroomApi = {
   // --- Global catalog ---
-  listGlobal: () => get<import('../types').Classroom[]>('/classrooms'),
-  createGlobal: (data: Partial<import('../types').Classroom>) =>
-    post<import('../types').Classroom>('/classrooms', data),
+  listGlobal: (institutionId?: string) => get<import('../types').Classroom[]>(institutionId ? `/classrooms?institution_id=${institutionId}` : '/classrooms'),
+  createGlobal: (data: Partial<import('../types').Classroom>, institutionId?: string) =>
+    post<import('../types').Classroom>(institutionId ? `/classrooms?institution_id=${institutionId}` : '/classrooms', data),
   updateGlobal: (id: string, data: Partial<import('../types').Classroom>) =>
     put<import('../types').Classroom>(`/classrooms/${id}`, data),
   deleteGlobal: (id: string) => del(`/classrooms/${id}`),
-  bulkImportGlobal: (file: File) => {
+  bulkImportGlobal: (file: File, institutionId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
-    return request<{ imported: number; skipped: number }>('POST', '/classrooms/bulk-import', formData, true);
+    return request<{ imported: number; skipped: number }>(
+      'POST', 
+      institutionId ? `/classrooms/bulk-import?institution_id=${institutionId}` : '/classrooms/bulk-import', 
+      formData, 
+      true
+    );
   },
 
   // --- Timetable-scoped ---
@@ -144,16 +170,21 @@ export const classroomApi = {
 // ---- Subjects (& Activities) ----
 export const subjectApi = {
   // --- Global catalog ---
-  listGlobal: () => get<import('../types').Subject[]>('/subjects'),
-  createGlobal: (data: Partial<import('../types').Subject>) =>
-    post<import('../types').Subject>('/subjects', data),
+  listGlobal: (institutionId?: string) => get<import('../types').Subject[]>(institutionId ? `/subjects?institution_id=${institutionId}` : '/subjects'),
+  createGlobal: (data: Partial<import('../types').Subject>, institutionId?: string) =>
+    post<import('../types').Subject>(institutionId ? `/subjects?institution_id=${institutionId}` : '/subjects', data),
   updateGlobal: (id: string, data: Partial<import('../types').Subject>) =>
     put<import('../types').Subject>(`/subjects/${id}`, data),
   deleteGlobal: (id: string) => del(`/subjects/${id}`),
-  bulkImportGlobal: (file: File) => {
+  bulkImportGlobal: (file: File, institutionId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
-    return request<{ imported: number; skipped: number }>('POST', '/subjects/bulk-import', formData, true);
+    return request<{ imported: number; skipped: number }>(
+      'POST', 
+      institutionId ? `/subjects/bulk-import?institution_id=${institutionId}` : '/subjects/bulk-import', 
+      formData, 
+      true
+    );
   },
 
   // --- Timetable-scoped ---
@@ -179,16 +210,21 @@ export const subjectApi = {
 // ---- Rooms ----
 export const roomApi = {
   // --- Global catalog ---
-  listGlobal: () => get<import('../types').Room[]>('/rooms'),
-  createGlobal: (data: Partial<import('../types').Room>) =>
-    post<import('../types').Room>('/rooms', data),
+  listGlobal: (institutionId?: string) => get<import('../types').Room[]>(institutionId ? `/rooms?institution_id=${institutionId}` : '/rooms'),
+  createGlobal: (data: Partial<import('../types').Room>, institutionId?: string) =>
+    post<import('../types').Room>(institutionId ? `/rooms?institution_id=${institutionId}` : '/rooms', data),
   updateGlobal: (id: string, data: Partial<import('../types').Room>) =>
     put<import('../types').Room>(`/rooms/${id}`, data),
   deleteGlobal: (id: string) => del(`/rooms/${id}`),
-  bulkImportGlobal: (file: File) => {
+  bulkImportGlobal: (file: File, institutionId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
-    return request<{ imported: number; skipped: number }>('POST', '/rooms/bulk-import', formData, true);
+    return request<{ imported: number; skipped: number }>(
+      'POST', 
+      institutionId ? `/rooms/bulk-import?institution_id=${institutionId}` : '/rooms/bulk-import', 
+      formData, 
+      true
+    );
   },
 
   // --- Timetable-scoped ---
@@ -233,6 +269,11 @@ export const generationApi = {
 export const timetableEntryApi = {
   list: (timetableId: string) =>
     get<import('../types').TimetableEntry[]>(`/timetables/${timetableId}/entries`),
+  create: (timetableId: string, data: Partial<import('../types').TimetableEntry>) =>
+    post<import('../types').TimetableEntry>(`/timetables/${timetableId}/entries`, data),
+  update: (timetableId: string, id: string, data: Partial<import('../types').TimetableEntry>) =>
+    put<import('../types').TimetableEntry>(`/timetables/${timetableId}/entries/${id}`, data),
+  delete: (timetableId: string, id: string) => del(`/timetables/${timetableId}/entries/${id}`),
 };
 
 // ---- Constraints ----

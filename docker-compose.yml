@@ -17,13 +17,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: timetable-redis
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
   backend:
     build:
       context: ./backend
@@ -34,31 +27,9 @@ services:
       - ./backend:/app
     environment:
       - DATABASE_URL=postgresql://timetable_user:timetable_password@postgres:5432/timetable_db
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
-    restart: unless-stopped
-
-  celery_worker:
-    build:
-      context: ./backend
-    container_name: timetable-worker
-    command: ["celery", "-A", "app.workers.generation_worker", "worker", "--loglevel=info"]
-    volumes:
-      - ./backend:/app
-    environment:
-      - DATABASE_URL=postgresql://timetable_user:timetable_password@postgres:5432/timetable_db
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-    depends_on:
-      - backend
-      - redis
     restart: unless-stopped
 
   frontend:

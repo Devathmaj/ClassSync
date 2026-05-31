@@ -3,6 +3,7 @@ import { lessonApi, classroomApi, subjectApi, facultyApi, roomApi } from '../../
 import type { Lesson, Classroom, Subject, Faculty, Room } from '../../types';
 import AddLessonModal from '../../components/AddLessonModal';
 import BulkImportLessonsModal from '../../components/BulkImportLessonsModal';
+import { downloadCSV } from '../../utils/export';
 
 interface LessonsPageProps {
   timetableId: string;
@@ -26,7 +27,8 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedLessons, setSelectedLessons] = useState<string[]>([]);
   
-  useEffect(() => {
+  const fetchAll = () => {
+    setLoading(true);
     Promise.all([
       lessonApi.list(timetableId),
       classroomApi.list(timetableId),
@@ -40,6 +42,10 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
       setFacultyList(f);
       setRooms(r);
     }).catch(() => {}).finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchAll();
   }, [timetableId]);
 
   const handleSaveMultiple = async (payloads: any[]) => {
@@ -53,7 +59,7 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
         const created = await lessonApi.create(timetableId, payload);
         createdLessons.push(created);
       }
-      setLessons(prev => [...prev, ...createdLessons]);
+      fetchAll();
       setShowForm(false);
     } catch (err: unknown) {
       throw err; // Let the modal catch and display it
@@ -127,6 +133,21 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
 
   const sharedGroups = Array.from(new Set(lessons.map(l => l.shared_group_id).filter(Boolean)));
 
+  const handleExport = () => {
+    const headers = ['Teacher Names', 'Class Names', 'Subject Names', 'Room Names', 'No. of Lessons', 'Length'];
+    const data = lessons.map(l => {
+      const cName = l.is_faculty_only ? '' : (classrooms.find(c => c.id === l.classroom_id)?.name || '');
+      const tNames = (l.faculty_ids || []).map(id => facultyList.find(f => f.id === id)?.full_name || '').filter(Boolean).join(';');
+      const sNames = (l.subject_ids || []).map(id => subjects.find(s => s.id === id)?.name || '').filter(Boolean).join(';');
+      const rName = l.room_id ? (rooms.find(r => r.id === l.room_id)?.name || '') : '';
+      const noLessons = l.periods_per_week?.toString() || '1';
+      const length = l.double_periods ? 'Double' : 'Single';
+
+      return [tNames, cName, sNames, rName, noLessons, length];
+    });
+    downloadCSV('lessons', headers, data);
+  };
+
   return (
     <>
       <div className="fade-in" style={{ paddingBottom: 88 }}>
@@ -151,6 +172,9 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
               🔗 Link Selected ({selectedLessons.length})
             </button>
           )}
+          <button className="btn btn-outline" onClick={handleExport} disabled={loading}>
+            📤 Export
+          </button>
           <button className="btn btn-outline" onClick={() => setBulkOpen(true)} disabled={loading}>
             + Bulk Import Lessons (CSV)
           </button>
@@ -180,9 +204,10 @@ export default function LessonsPage({ timetableId, onBack }: LessonsPageProps) {
             subjects={subjects}
             facultyList={facultyList}
             rooms={rooms}
-            onImported={(newLessons) => setLessons((prev) => [...prev, ...newLessons])}
+            onImported={() => {
+              fetchAll();
+            }}
           />
-
           <div className="card">
             <div className="card-header">
               <span className="card-title">All Lesson Requirements</span>

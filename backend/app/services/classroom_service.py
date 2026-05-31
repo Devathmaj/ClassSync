@@ -8,14 +8,21 @@ from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from app.models.classroom import Classroom
 from app.models.timetable_entities import TimetableClassroom
+from app.models.user import User, RoleType
 from app.utils.csv_utils import parse_csv_bytes, generate_short_name
 
 
 # ── Global CRUD ──────────────────────────────────────────────────────────────
 
-def get_global_classrooms(user_id: UUID, db: Session):
-    """Return all global classrooms/grades/divisions belonging to this user."""
-    return db.query(Classroom).filter(Classroom.owner_id == user_id).order_by(Classroom.name).all()
+def get_global_classrooms(current_user: User, db: Session, institution_id: str = None):
+    """Return global classrooms. Admins see all (or filtered), institutions see their own."""
+    query = db.query(Classroom)
+    if current_user.role == RoleType.ADMIN:
+        if institution_id:
+            query = query.filter(Classroom.owner_id == institution_id)
+    else:
+        query = query.filter(Classroom.owner_id == current_user.id)
+    return query.order_by(Classroom.name).all()
 
 def create_classroom(user_id: UUID, payload_dict: dict, db: Session):
     """Create a new classroom/grade/division in the global catalog."""
@@ -110,14 +117,18 @@ def bulk_import_classrooms(user_id: UUID, content: bytes, db: Session):
         teacher_name = row.get("Class Teacher", "").strip()
         teacher_id = None
         if teacher_name:
-            teacher = db.query(Faculty).filter(Faculty.name == teacher_name, Faculty.owner_id == user_id).first()
+            teacher = db.query(Faculty).filter(Faculty.full_name == teacher_name, Faculty.owner_id == user_id).first()
             if teacher:
                 teacher_id = teacher.id
+        
+        student_count_raw = row.get("Student Count", "").strip()
+        student_count = int(student_count_raw) if student_count_raw.isdigit() else None
 
         db.add(Classroom(
             name=name,
             short_name=short_name.upper(),
             class_teacher_id=teacher_id,
+            student_count=student_count,
             owner_id=user_id,
             organization_id=None,
         ))

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { roomApi } from '../../api';
-import type { Room } from '../../types';
+import { roomApi, timetableApi } from '../../api';
+import type { Room, Timetable } from '../../types';
 import BulkImportModal from '../../components/bulk-import/BulkImportModal';
+import { downloadCSV } from '../../utils/export';
 
 interface RoomsPageProps {
   timetableId: string;
@@ -14,6 +15,7 @@ const emptyForm = { name: '', short_name: '', capacity: '', building_name: '' };
 export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
   const [attached, setAttached] = useState<Room[]>([]);
   const [catalog, setCatalog] = useState<Room[]>([]);
+  const [timetable, setTimetable] = useState<Timetable | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogSearch, setCatalogSearch] = useState('');
 
@@ -29,9 +31,14 @@ export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
   const [attaching, setAttaching] = useState<string | null>(null);
 
   const loadData = async () => {
+    let tt = timetable;
+    if (!tt) {
+      tt = await timetableApi.get(timetableId);
+      setTimetable(tt);
+    }
     const [att, cat] = await Promise.all([
       roomApi.list(timetableId),
-      roomApi.listGlobal(),
+      roomApi.listGlobal(tt.owner_id),
     ]);
     setAttached(att);
     setCatalog(cat);
@@ -74,7 +81,7 @@ export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
         await roomApi.updateGlobal(editId, payload);
         await loadData();
       } else {
-        const created = await roomApi.createGlobal(payload);
+        const created = await roomApi.createGlobal(payload, timetable?.owner_id);
         await roomApi.attach(timetableId, created.id).catch(() => {});
         await loadData();
       }
@@ -114,6 +121,17 @@ export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
       r.name.toLowerCase().includes(catalogSearch.toLowerCase()) ||
       r.short_name.toLowerCase().includes(catalogSearch.toLowerCase()))
   );
+
+  const handleExport = () => {
+    const headers = ['Room Name', 'Short Name', 'Capacity', 'Room Group Name'];
+    const data = catalog.map(r => [
+      r.name,
+      r.short_name,
+      r.capacity?.toString() || '',
+      r.building_name || ''
+    ]);
+    downloadCSV('rooms', headers, data);
+  };
 
   return (
     <>
@@ -238,6 +256,9 @@ export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
                 value={catalogSearch}
                 onChange={e => setCatalogSearch(e.target.value)}
               />
+              <button className="btn btn-outline btn-sm" onClick={handleExport}>
+                📤 Export
+              </button>
               <button className="btn btn-outline btn-sm" onClick={() => setShowBulkImport(true)}>
                 📥 Bulk Import
               </button>
@@ -301,7 +322,7 @@ export default function RoomsPage({ timetableId, onBack }: RoomsPageProps) {
           { name: 'Short Name', required: false },
           { name: 'Room Group Name', required: false }
         ]}
-        onImport={(file) => roomApi.bulkImportGlobal(file)}
+        onImport={(file) => roomApi.bulkImportGlobal(file, timetable?.owner_id)}
         onSuccess={() => loadData()}
         onDownloadTemplate={() => {
           const csvContent = "data:text/csv;charset=utf-8,Room Name,Short Name,Room Group Name\nPhysics Lab,PHLAB,Science Block\nRoom 101,101,Main Building";

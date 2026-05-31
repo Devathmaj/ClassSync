@@ -21,7 +21,6 @@ class GenerationJob(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     timetable_id = Column(UUID(as_uuid=True), ForeignKey("timetables.id"), nullable=False)
     status = Column(SAEnum(JobStatus), default=JobStatus.PENDING)
-    celery_task_id = Column(String(255), nullable=True)
     progress = Column(Float, default=0.0)  # 0.0 – 1.0
     score = Column(Float, nullable=True)   # optimization score
     error_message = Column(Text, nullable=True)

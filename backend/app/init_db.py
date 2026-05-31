@@ -28,27 +28,9 @@ def init_db():
             for table in ("faculty", "classrooms", "subjects", "rooms"):
                 conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN organization_id DROP NOT NULL"))
 
-        db = SessionLocal()
-        # Check if the test user exists
-        test_email = "testuser@classsync.com"
-        user = db.query(User).filter(User.email == test_email).first()
-
-        if not user:
-            logger.info("Generating test user...")
-            test_password = "password123"
-            new_user = User(
-                email=test_email,
-                hashed_password=hash_password(test_password),
-                full_name="Test User",
-                is_active=True,
-                is_verified=True,
-                plan=PlanType.MAX
-            )
-            db.add(new_user)
-            db.commit()
-            logger.info(f"Test user generated. Email: {test_email}, Password: {test_password}")
-        else:
-            logger.info(f"Test user already exists: {test_email}")
+        # Check if the admin user exists, but we don't need to generate a testuser anymore
+        # main.py startup event handles admin user creation.
+        pass
 
     except Exception as e:
         logger.error(f"Error initializing database: {e}")

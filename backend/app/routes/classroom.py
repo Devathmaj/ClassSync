@@ -4,13 +4,12 @@
 The UI labels them as 'Grades & Divisions' to help users understand their purpose.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
-from typing import Optional
+from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, RoleType
 from app.utils.auth import get_current_user
 from app.services import classroom_service
 
@@ -50,20 +49,25 @@ class ClassroomOut(BaseModel):
 
 @router.get("/classrooms", response_model=List[ClassroomOut], tags=["Classrooms - Global"])
 def list_global_classrooms(
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List all classrooms/grades/divisions in the global catalog for the current user."""
-    return classroom_service.get_global_classrooms(current_user.id, db)
+    """List all classrooms/grades/divisions in the global catalog."""
+    return classroom_service.get_global_classrooms(current_user, db, institution_id)
 
 @router.post("/classrooms", response_model=ClassroomOut, status_code=status.HTTP_201_CREATED, tags=["Classrooms - Global"])
 def create_global_classroom(
     payload: ClassroomCreate,
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Create a new classroom/grade/division in the global catalog."""
-    return classroom_service.create_classroom(current_user.id, payload.dict(), db)
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target_owner = institution_id if (current_user.role == RoleType.ADMIN and institution_id) else current_user.id
+    return classroom_service.create_classroom(target_owner, payload.dict(), db)
 
 @router.put("/classrooms/{classroom_id}", response_model=ClassroomOut, tags=["Classrooms - Global"])
 def update_global_classroom(
@@ -73,6 +77,8 @@ def update_global_classroom(
     db: Session = Depends(get_db),
 ):
     """Update a global classroom/grade/division."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return classroom_service.update_classroom(classroom_id, payload.dict(exclude_unset=True), db)
     except ValueError as e:
@@ -85,6 +91,8 @@ def delete_global_classroom(
     db: Session = Depends(get_db),
 ):
     """Delete a global classroom/grade/division."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         classroom_service.delete_classroom(classroom_id, db)
     except ValueError as e:
@@ -93,14 +101,18 @@ def delete_global_classroom(
 @router.post("/classrooms/bulk-import", tags=["Classrooms - Global"])
 async def bulk_import_global_classrooms(
     file: UploadFile = File(...),
+    institution_id: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Bulk import classrooms from CSV into the global catalog.
     CSV columns: Class Name, Short Name, Student Count
     """
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    target_owner = institution_id if (current_user.role == RoleType.ADMIN and institution_id) else current_user.id
     content = await file.read()
-    return classroom_service.bulk_import_classrooms(current_user.id, content, db)
+    return classroom_service.bulk_import_classrooms(target_owner, content, db)
 
 
 # ── Timetable Attach / Detach (/timetables/{id}/classrooms) ──────────────────
@@ -122,6 +134,8 @@ def attach_classroom_to_timetable(
     db: Session = Depends(get_db),
 ):
     """Attach an existing global classroom/grade/division to a timetable."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return classroom_service.attach_classroom(timetable_id, classroom_id, db)
     except ValueError as e:
@@ -137,6 +151,8 @@ def detach_classroom_from_timetable(
     db: Session = Depends(get_db),
 ):
     """Detach a classroom from a timetable (does not delete the classroom globally)."""
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         classroom_service.detach_classroom(timetable_id, classroom_id, db)
     except ValueError as e:

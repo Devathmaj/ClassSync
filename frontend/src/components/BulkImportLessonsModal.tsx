@@ -230,6 +230,30 @@ export default function BulkImportLessonsModal({
         });
       };
 
+      try {
+        const [gClassrooms, gSubjects, gFaculty, gRooms] = await Promise.all([
+          classroomApi.listGlobal(),
+          subjectApi.listGlobal(),
+          facultyApi.listGlobal(),
+          roomApi.listGlobal()
+        ]);
+        
+        gFaculty.forEach((f) => {
+          upsertInto(caches.facultyByName, f, [(x) => (x as any).full_name, (x) => x.short_name]);
+        });
+        gClassrooms.forEach((c) => {
+          upsertInto(caches.classroomsByName, c, [(x) => x.name, (x) => x.short_name]);
+        });
+        gSubjects.forEach((s) => {
+          upsertInto(caches.subjectsByName, s, [(x) => x.name, (x) => x.short_name]);
+        });
+        gRooms.forEach((r) => {
+          upsertInto(caches.roomsByName, r, [(x) => x.name, (x) => x.short_name]);
+        });
+      } catch (err) {
+        console.warn("Failed to fetch global lists for bulk import caching", err);
+      }
+
       facultyList.forEach((f) => {
         upsertInto(caches.facultyByName, f, [(x) => (x as any).full_name, (x) => x.short_name]);
       });

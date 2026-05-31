@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { timetableApi } from '../api';
+import { timetableApi, usersApi } from '../api';
 import type { Timetable } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 interface TimetablesPageProps {
   onNavigate: (page: string, id?: string) => void;
@@ -13,32 +14,45 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const { user } = useAuth();
+  const [hierarchy, setHierarchy] = useState<any[]>([]);
   const [form, setForm] = useState({
     name: '',
     description: '',
+    institution_id: '',
     academic_session: { name: '', start_date: '', end_date: '' },
   });
 
   useEffect(() => {
     timetableApi.list().then(setTimetables).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+    if (user?.role === 'admin') {
+      usersApi.getHierarchy().then(setHierarchy).catch(() => {});
+    }
+  }, [user]);
 
   const handleCreate = async () => {
     if (!form.name.trim()) {
       setError('Timetable Name is required');
       return;
     }
+    if (user?.role === 'admin' && !form.institution_id) {
+      setError('Please select an Institution');
+      return;
+    }
     setCreating(true);
     setError('');
     try {
       const payload: any = { name: form.name.trim(), description: form.description.trim() || undefined };
+      if (user?.role === 'admin') {
+        payload.institution_id = form.institution_id;
+      }
       if (form.academic_session.name || form.academic_session.start_date || form.academic_session.end_date) {
         payload.academic_session = form.academic_session;
       }
       const t = await timetableApi.create(payload);
       setTimetables(prev => [t, ...prev]);
       setShowCreateModal(false);
-      setForm({ name: '', description: '', academic_session: { name: '', start_date: '', end_date: '' } });
+      setForm({ name: '', description: '', institution_id: '', academic_session: { name: '', start_date: '', end_date: '' } });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create');
     } finally {
@@ -66,9 +80,19 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
           <h1 className="header-greeting">My Timetables</h1>
           <p className="header-sub">Create, manage, and publish your timetables</p>
         </div>
-        <button id="new-timetable-btn" className="btn btn-primary" onClick={() => { setShowCreateModal(true); setError(''); }}>
-          + New Timetable
-        </button>
+        {user?.role !== 'faculty' && (
+          <button id="new-timetable-btn" className="btn btn-primary" onClick={() => { 
+            if (user?.role === 'admin' && hierarchy.length === 0) {
+              alert('You must create an Institution first before creating a timetable.');
+              return;
+            }
+            setForm(prev => ({ ...prev, institution_id: hierarchy.length > 0 ? hierarchy[0].id : '' }));
+            setShowCreateModal(true); 
+            setError(''); 
+          }}>
+            + New Timetable
+          </button>
+        )}
       </div>
 
       <div className="page-content">
@@ -112,6 +136,21 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
                       <textarea className="form-input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Optional description..." rows={2} maxLength={500} />
                       <div className="form-sublabel">Optional — {form.description.length}/500 characters</div>
                     </div>
+                    {user?.role === 'admin' && (
+                      <div className="form-group">
+                        <label className="form-label">Institution *</label>
+                        <select 
+                          className="form-input"
+                          value={form.institution_id}
+                          onChange={e => setForm({ ...form, institution_id: e.target.value })}
+                        >
+                          {hierarchy.map(inst => (
+                            <option key={inst.id} value={inst.id}>{inst.full_name} (@{inst.username})</option>
+                          ))}
+                        </select>
+                        <div className="form-sublabel">Required for Admin login.</div>
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -163,7 +202,7 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
                 <p className="text-sm text-muted">Publish a timetable to start using the substitute management system.</p>
               </div>
             ) : (
-              <TimetableTable timetables={published} onOpen={id => onNavigate('timetable-overview', id)} onDelete={handleDelete} />
+              <TimetableTable timetables={published} onOpen={id => onNavigate(user?.role === 'faculty' ? 'timetable-editor' : 'timetable-overview', id)} onDelete={handleDelete} canEdit={user?.role !== 'faculty'} />
             )}
           </div>
         </div>
@@ -180,7 +219,7 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
             ) : drafts.length === 0 ? (
               <p className="text-sm text-muted">No drafts. Create a timetable to get started.</p>
             ) : (
-              <TimetableTable timetables={drafts} onOpen={id => onNavigate('timetable-overview', id)} onDelete={handleDelete} />
+              <TimetableTable timetables={drafts} onOpen={id => onNavigate(user?.role === 'faculty' ? 'timetable-editor' : 'timetable-overview', id)} onDelete={handleDelete} canEdit={user?.role !== 'faculty'} />
             )}
           </div>
         </div>
@@ -189,7 +228,7 @@ export default function TimetablesPage({ onNavigate }: TimetablesPageProps) {
   );
 }
 
-function TimetableTable({ timetables, onOpen, onDelete }: { timetables: Timetable[]; onOpen: (id: string) => void; onDelete: (id: string) => void }) {
+function TimetableTable({ timetables, onOpen, onDelete, canEdit }: { timetables: Timetable[]; onOpen: (id: string) => void; onDelete: (id: string) => void; canEdit: boolean }) {
   return (
     <table className="data-table">
       <thead>
@@ -223,7 +262,7 @@ function TimetableTable({ timetables, onOpen, onDelete }: { timetables: Timetabl
                 >
                   Open
                 </button>
-                {t.status === 'draft' && (
+                {canEdit && t.status === 'draft' && (
                   <button
                     id={`publish-timetable-${t.id}`}
                     className="btn btn-green btn-sm"
@@ -235,13 +274,15 @@ function TimetableTable({ timetables, onOpen, onDelete }: { timetables: Timetabl
                     Publish
                   </button>
                 )}
-                <button
-                  className="btn btn-red btn-sm"
-                  onClick={() => onDelete(t.id)}
-                  title="Delete Timetable"
-                >
-                  🗑️
-                </button>
+                {canEdit && (
+                  <button
+                    className="btn btn-red btn-sm"
+                    onClick={() => onDelete(t.id)}
+                    title="Delete Timetable"
+                  >
+                    🗑️
+                  </button>
+                )}
               </div>
             </td>
           </tr>

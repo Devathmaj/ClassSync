@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { bellScheduleApi, timetableApi, facultyApi, classroomApi, subjectApi, lessonApi, roomApi, generationApi, timetableEntryApi } from '../api';
 import type { Timetable, Classroom, Subject, Lesson, Faculty, Room, BellSchedule, TimetableEntry } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 interface EditorPageProps {
   timetableId: string;
@@ -33,6 +34,7 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
   const gridRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+  const { user } = useAuth();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -108,6 +110,58 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
     }
   };
 
+  const handleDrop = async (e: React.DragEvent, dropDay: string, dropPeriod: number, dropClassroomId?: string, dropFacultyId?: string, dropRoomId?: string, targetEntry?: TimetableEntry) => {
+    e.preventDefault();
+    if (user?.role === 'faculty') return;
+    const dragType = e.dataTransfer.getData('type');
+
+    try {
+      if (dragType === 'unscheduled') {
+        const lessonId = e.dataTransfer.getData('lesson_id');
+        const lesson = lessonById.get(lessonId);
+        if (!lesson) return;
+
+        if (targetEntry) {
+          await timetableEntryApi.delete(timetableId, targetEntry.id);
+        }
+
+        await timetableEntryApi.create(timetableId, {
+          lesson_id: lesson.id,
+          classroom_id: dropClassroomId || lesson.classroom_id,
+          faculty_id: dropFacultyId || lesson.faculty_ids?.[0],
+          subject_id: lesson.subject_ids?.[0],
+          room_id: dropRoomId,
+          day_of_week: dropDay,
+          period_number: dropPeriod,
+          week_number: 1
+        });
+      } else if (dragType === 'entry') {
+        const sourceEntryId = e.dataTransfer.getData('entry_id');
+        const sourceEntry = entries.find(x => x.id === sourceEntryId);
+        if (!sourceEntry || (targetEntry && targetEntry.id === sourceEntry.id)) return;
+
+        if (targetEntry) {
+          await timetableEntryApi.update(timetableId, targetEntry.id, {
+            day_of_week: sourceEntry.day_of_week,
+            period_number: sourceEntry.period_number
+          });
+        }
+
+        await timetableEntryApi.update(timetableId, sourceEntry.id, {
+          day_of_week: dropDay,
+          period_number: dropPeriod,
+          classroom_id: dropClassroomId || sourceEntry.classroom_id,
+          faculty_id: dropFacultyId || sourceEntry.faculty_id,
+          room_id: dropRoomId || sourceEntry.room_id
+        });
+      }
+      await loadEditorData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update timetable entry');
+    }
+  };
+
+
   const getDurationMins = (start: string, end: string) => {
     if (!start || !end) return 15;
     const [sh, sm] = start.split(':').map(Number);
@@ -115,7 +169,9 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
     return (eh * 60 + em) - (sh * 60 + sm);
   };
 
-  const getEntryColor = (entry: TimetableEntry) => {
+  const getEntryColor = (slotEntries: TimetableEntry[]) => {
+    if (!slotEntries || slotEntries.length === 0) return 'var(--color-blue)';
+    const entry = slotEntries[0];
     const lesson = lessonById.get(entry.lesson_id);
     const explicitSubject = entry.subject_id ? subjectById.get(entry.subject_id) : undefined;
     const fallbackSubjectId = explicitSubject ? undefined : lesson?.subject_ids?.[0];
@@ -143,12 +199,16 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
 
   const entities = viewMode === 'section' ? classrooms : viewMode === 'faculty' ? faculty : rooms;
 
-  const entryLookup = new Map<string, TimetableEntry>();
+  const entryLookup = new Map<string, TimetableEntry[]>();
   entries.forEach((entry) => {
     const ownerId = viewMode === 'section' ? entry.classroom_id : viewMode === 'faculty' ? entry.faculty_id : entry.room_id;
     if (!ownerId) return;
     const key = `${ownerId}-${entry.day_of_week}-${entry.period_number}`;
-    if (!entryLookup.has(key)) entryLookup.set(key, entry);
+    if (!entryLookup.has(key)) {
+      entryLookup.set(key, [entry]);
+    } else {
+      entryLookup.get(key)!.push(entry);
+    }
   });
 
   const unscheduledLessons = lessons.filter((lesson) => {
@@ -162,7 +222,9 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
   const facultyById = new Map(faculty.map((f) => [f.id, f]));
   const roomById = new Map(rooms.map((r) => [r.id, r]));
 
-  const renderEntryText = (entry: TimetableEntry) => {
+  const renderEntryText = (slotEntries: TimetableEntry[]) => {
+    if (!slotEntries || slotEntries.length === 0) return '';
+    const entry = slotEntries[0];
     const lesson = lessonById.get(entry.lesson_id);
     const explicitSubject = entry.subject_id ? subjectById.get(entry.subject_id) : undefined;
     const fallbackSubjectId = explicitSubject ? undefined : lesson?.subject_ids?.[0];
@@ -170,21 +232,30 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
     const baseLabel = subject?.short_name ?? 'Lesson';
 
     if (viewMode === 'section') {
-      const facultyId = entry.faculty_id ?? lesson?.faculty_ids?.[0];
-      const fac = facultyId ? facultyById.get(facultyId) : undefined;
-      return fac ? `${baseLabel} (${fac.short_name})` : baseLabel;
+      const facultyNames = slotEntries.map(e => {
+        const facId = e.faculty_id ?? lessonById.get(e.lesson_id)?.faculty_ids?.[0];
+        return facId ? facultyById.get(facId)?.short_name : undefined;
+      }).filter(Boolean);
+      const uniqueFacs = Array.from(new Set(facultyNames));
+      return uniqueFacs.length > 0 ? `${baseLabel} (${uniqueFacs.join(', ')})` : baseLabel;
     }
 
     if (viewMode === 'faculty') {
-      const classroomId = entry.classroom_id ?? lesson?.classroom_id;
-      const cls = classroomId ? classroomById.get(classroomId) : undefined;
-      return cls ? `${baseLabel} (${cls.short_name})` : baseLabel;
+      const classNames = slotEntries.map(e => {
+        const cid = e.classroom_id ?? lessonById.get(e.lesson_id)?.classroom_id;
+        return cid ? classroomById.get(cid)?.short_name : undefined;
+      }).filter(Boolean);
+      const uniqueClasses = Array.from(new Set(classNames));
+      return uniqueClasses.length > 0 ? `${baseLabel} (${uniqueClasses.join(', ')})` : baseLabel;
     }
 
     if (viewMode === 'room') {
-      const roomId = entry.room_id;
-      const room = roomId ? roomById.get(roomId) : undefined;
-      return room ? `${baseLabel} (${room.short_name})` : baseLabel;
+      const classNames = slotEntries.map(e => {
+        const cid = e.classroom_id ?? lessonById.get(e.lesson_id)?.classroom_id;
+        return cid ? classroomById.get(cid)?.short_name : undefined;
+      }).filter(Boolean);
+      const uniqueClasses = Array.from(new Set(classNames));
+      return uniqueClasses.length > 0 ? `${baseLabel} (${uniqueClasses.join(', ')})` : baseLabel;
     }
 
     return baseLabel;
@@ -278,8 +349,8 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
             if (col.type === 'break') {
               rowData[col.id] = { content: `${(col.name || 'Break').toUpperCase()}\n${col.start}-${col.end}`, styles: { halign: 'center', valign: 'middle', fillColor: [241, 245, 249], textColor: [71, 85, 105], fontStyle: 'bold' } };
             } else {
-            const entry = entryLookup.get(`${entity.id}-${day}-${col.number}`);
-            rowData[col.id] = entry ? renderEntryText(entry) : '-';
+            const slotEntries = entryLookup.get(`${entity.id}-${day}-${col.number}`);
+            rowData[col.id] = slotEntries ? renderEntryText(slotEntries) : '-';
           }
         });
         return rowData;
@@ -343,8 +414,8 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
             if (dayCol.type === 'break') {
               rowData[col.id] = { content: `${(dayCol.name || 'Break').toUpperCase()}\n${dayCol.start}-${dayCol.end}`, styles: { halign: 'center', valign: 'middle', fillColor: [241, 245, 249], textColor: [71, 85, 105], fontStyle: 'bold' } };
             } else {
-              const entry = entryLookup.get(`${classroom.id}-${day}-${dayCol.number}`);
-              rowData[col.id] = entry ? renderEntryText(entry) : '-';
+              const slotEntries = entryLookup.get(`${classroom.id}-${day}-${dayCol.number}`);
+              rowData[col.id] = slotEntries ? renderEntryText(slotEntries) : '-';
             }
           });
           return rowData;
@@ -379,8 +450,8 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
             if (col.type === 'break') {
               return [col.id, { content: `${(col.name || 'Break').toUpperCase()}\n${col.start}-${col.end}`, styles: { halign: 'center', valign: 'middle', fillColor: [241, 245, 249], textColor: [71, 85, 105], fontStyle: 'bold' } }];
             } else {
-              const entry = entryLookup.get(`${classroom.id}-Friday-${col.number}`);
-              return [col.id, entry ? renderEntryText(entry) : '-'];
+              const slotEntries = entryLookup.get(`${classroom.id}-Friday-${col.number}`);
+              return [col.id, slotEntries ? renderEntryText(slotEntries) : '-'];
             }
           }))
         }];
@@ -517,14 +588,16 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
             </div>
           )}
         </div>
-        <button
-          id="generate-btn"
-          className="btn btn-primary"
-          onClick={handleGenerate}
-          disabled={generating}
-        >
-          {generating ? `⚡ Generating… (${jobStatus})` : '⚡ Generate'}
-        </button>
+        {user?.role !== 'faculty' && (
+          <button
+            id="generate-btn"
+            className="btn btn-primary"
+            onClick={handleGenerate}
+            disabled={generating}
+          >
+            {generating ? `⚡ Generating… (${jobStatus})` : '⚡ Generate'}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -539,6 +612,20 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
           <table className="grid-table" ref={tableRef}>
             {(() => {
               const noData = entities.length === 0 || workingDays.length === 0 || !hasAnyPeriods;
+
+              if (user?.role === 'faculty' && entries.length === 0) {
+                return (
+                  <tbody>
+                    <tr>
+                      <td colSpan={99} style={{ textAlign: 'center', padding: 80, color: 'var(--color-text-muted)', border: 'none' }}>
+                        <div style={{ fontSize: 48, marginBottom: 16 }}>🕒</div>
+                        <h3 className="font-semibold" style={{ fontSize: 20, marginBottom: 8 }}>Not Generated Yet</h3>
+                        <p>This timetable hasn't been generated by the administrator.</p>
+                      </td>
+                    </tr>
+                  </tbody>
+                );
+              }
 
               // Single-class layout (days = rows, periods = columns)
               if (viewMode === 'section' && sectionLayoutMode === 'single_class') {
@@ -610,23 +697,37 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
                                     );
                                   }
 
-                                  const entry = entryLookup.get(`${classroomId}-${day}-${dayCol.number}`);
-                                  return (
-                                    <td
-                                      key={`${day}-${dayCol.id}`}
-                                      id={`slot-${classroomId}-${day}-${dayCol.id}`}
-                                      className="grid-slot"
-                                      title={entry ? 'Scheduled lesson' : 'Empty slot'}
-                                    >
-                                      {entry ? (
-                                        <div className="lesson-card" style={{ background: getEntryColor(entry), color: 'white', margin: 0 }}>
-                                          {renderEntryText(entry)}
-                                        </div>
-                                      ) : (
-                                        <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>+</div>
-                                      )}
-                                    </td>
-                                  );
+                                    const slotEntries = entryLookup.get(`${classroomId}-${day}-${dayCol.number}`);
+                                    const cellClassroom = classroomId;
+                                    const cellFaculty = undefined;
+                                    const cellRoom = undefined;
+                                    
+                                    return (
+                                      <td
+                                        key={`${day}-${dayCol.id}`}
+                                        id={`slot-${classroomId}-${day}-${dayCol.id}`}
+                                        className="grid-slot"
+                                        title={slotEntries ? 'Scheduled lesson' : 'Empty slot'}
+                                        onDragOver={(e) => { if (user?.role !== 'faculty') e.preventDefault(); }}
+                                        onDrop={(e) => handleDrop(e, day, dayCol.number, cellClassroom, cellFaculty, cellRoom, slotEntries?.[0])}
+                                      >
+                                        {slotEntries ? (
+                                          <div 
+                                            className="lesson-card" 
+                                            style={{ background: getEntryColor(slotEntries), color: 'white', margin: 0, cursor: user?.role === 'faculty' ? 'default' : 'grab' }}
+                                            draggable={user?.role !== 'faculty'}
+                                            onDragStart={(e) => {
+                                              e.dataTransfer.setData('type', 'entry');
+                                              e.dataTransfer.setData('entry_id', slotEntries[0].id);
+                                            }}
+                                          >
+                                            {renderEntryText(slotEntries)}
+                                          </div>
+                                        ) : (
+                                          <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>{user?.role === 'faculty' ? '-' : '+'}</div>
+                                        )}
+                                      </td>
+                                    );
                                 })}
                               </tr>
                             )})
@@ -679,20 +780,34 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
                                   );
                                 }
 
-                                const entry = entryLookup.get(`${classroomId}-Friday-${col.number}`);
+                                const slotEntries = entryLookup.get(`${classroomId}-Friday-${col.number}`);
+                                const cellClassroom = classroomId;
+                                const cellFaculty = undefined;
+                                const cellRoom = undefined;
+
                                 return (
                                   <td
                                     key={`Friday-${col.id}`}
                                     id={`slot-${classroomId}-Friday-${col.id}`}
                                     className="grid-slot"
-                                    title={entry ? 'Scheduled lesson' : 'Empty slot'}
+                                    title={slotEntries ? 'Scheduled lesson' : 'Empty slot'}
+                                    onDragOver={(e) => { if (user?.role !== 'faculty') e.preventDefault(); }}
+                                    onDrop={(e) => handleDrop(e, 'Friday', col.number, cellClassroom, cellFaculty, cellRoom, slotEntries?.[0])}
                                   >
-                                    {entry ? (
-                                      <div className="lesson-card" style={{ background: getEntryColor(entry), color: 'white', margin: 0 }}>
-                                        {renderEntryText(entry)}
+                                    {slotEntries ? (
+                                      <div 
+                                        className="lesson-card" 
+                                        style={{ background: getEntryColor(slotEntries), color: 'white', margin: 0, cursor: user?.role === 'faculty' ? 'default' : 'grab' }}
+                                        draggable={user?.role !== 'faculty'}
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.setData('type', 'entry');
+                                          e.dataTransfer.setData('entry_id', slotEntries[0].id);
+                                        }}
+                                      >
+                                        {renderEntryText(slotEntries)}
                                       </div>
                                     ) : (
-                                      <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>+</div>
+                                      <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>{user?.role === 'faculty' ? '-' : '+'}</div>
                                     )}
                                   </td>
                                 );
@@ -777,20 +892,34 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
                                 );
                               }
 
-                              const entry = entryLookup.get(`${entity.id}-${day}-${col.number}`);
+                              const slotEntries = entryLookup.get(`${entity.id}-${day}-${col.number}`);
+                              const cellClassroom = viewMode === 'section' ? entity.id : undefined;
+                              const cellFaculty = viewMode === 'faculty' ? entity.id : undefined;
+                              const cellRoom = viewMode === 'room' ? entity.id : undefined;
+
                               return (
                                 <td
                                   key={`${day}-${col.id}`}
                                   id={`slot-${entity.id}-${day}-${col.id}`}
                                   className="grid-slot"
-                                  title={entry ? 'Scheduled lesson' : 'Empty slot'}
+                                  title={slotEntries ? 'Scheduled lesson' : 'Empty slot'}
+                                  onDragOver={(e) => { if (user?.role !== 'faculty') e.preventDefault(); }}
+                                  onDrop={(e) => handleDrop(e, day, col.number, cellClassroom, cellFaculty, cellRoom, slotEntries?.[0])}
                                 >
-                                  {entry ? (
-                                    <div className="lesson-card" style={{ background: getEntryColor(entry), color: 'white', margin: 0 }}>
-                                      {renderEntryText(entry)}
+                                  {slotEntries ? (
+                                    <div 
+                                      className="lesson-card" 
+                                      style={{ background: getEntryColor(slotEntries), color: 'white', margin: 0, cursor: user?.role === 'faculty' ? 'default' : 'grab' }}
+                                      draggable={user?.role !== 'faculty'}
+                                      onDragStart={(e) => {
+                                        e.dataTransfer.setData('type', 'entry');
+                                        e.dataTransfer.setData('entry_id', slotEntries[0].id);
+                                      }}
+                                    >
+                                      {renderEntryText(slotEntries)}
                                     </div>
                                   ) : (
-                                    <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>+</div>
+                                    <div style={{ color: 'var(--color-border)', fontSize: 20, textAlign: 'center', paddingTop: 12 }}>{user?.role === 'faculty' ? '-' : '+'}</div>
                                   )}
                                 </td>
                               );
@@ -811,43 +940,65 @@ export default function TimetableEditorPage({ timetableId, onBack }: EditorPageP
       </div>
 
       {/* Unscheduled Lessons Bar */}
-      <div className="unscheduled-bar">
-        <span className="font-semibold text-sm">
-          Unscheduled Lessons ({unscheduledLessons.length})
-        </span>
-        {unscheduledLessons.map(lesson => {
-          const subjectId = lesson.subject_ids?.[0];
-          const sub = subjectId ? subjects.find(s => s.id === subjectId) : undefined;
-          const warnings = timetable?.generation_warnings ?? [];
-          const warning = warnings.find(w => w.lesson_id === lesson.id);
+      {user?.role !== 'faculty' && (
+        <div 
+          className="unscheduled-bar"
+          onDragOver={(e) => { e.preventDefault(); }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            const dragType = e.dataTransfer.getData('type');
+            if (dragType === 'entry') {
+              const sourceEntryId = e.dataTransfer.getData('entry_id');
+              try {
+                await timetableEntryApi.delete(timetableId, sourceEntryId);
+                await loadEditorData();
+              } catch (err: any) {
+                setError(err.message || 'Failed to unschedule lesson');
+              }
+            }
+          }}
+        >
+          <span className="font-semibold text-sm">
+            Unscheduled Lessons ({unscheduledLessons.length})
+          </span>
+          {unscheduledLessons.map(lesson => {
+            const subjectId = lesson.subject_ids?.[0];
+            const sub = subjectId ? subjects.find(s => s.id === subjectId) : undefined;
+            const warnings = timetable?.generation_warnings ?? [];
+            const warning = warnings.find(w => w.lesson_id === lesson.id);
 
-          return (
-            <div
-              key={lesson.id}
-              id={`unscheduled-${lesson.id}`}
-              className="lesson-card"
-              style={{ background: sub?.display_color || 'var(--color-blue)', display: 'flex', flexDirection: 'column', gap: 4 }}
-              draggable
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{sub?.short_name || 'Lesson'}</span>
-                <span className="badge" style={{ background: 'rgba(255,255,255,0.3)', color: 'white', fontSize: 10 }}>
-                  = {lesson.periods_per_week}P
-                </span>
-              </div>
-              {warning && (
-                <div style={{ color: '#ffcccc', fontSize: 10, lineHeight: 1.2, padding: '2px 4px', background: 'rgba(0,0,0,0.2)', borderRadius: 4 }}>
-                  ⚠️ {warning.reason}
+            return (
+              <div
+                key={lesson.id}
+                id={`unscheduled-${lesson.id}`}
+                className="lesson-card"
+                style={{ background: sub?.display_color || 'var(--color-blue)', display: 'flex', flexDirection: 'column', gap: 4, cursor: 'grab' }}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('type', 'unscheduled');
+                  e.dataTransfer.setData('lesson_id', lesson.id);
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>{sub?.short_name || 'Lesson'}</span>
+                  <span className="badge" style={{ background: 'rgba(255,255,255,0.3)', color: 'white', fontSize: 10 }}>
+                    = {lesson.periods_per_week}P
+                  </span>
                 </div>
-              )}
-            </div>
-          );
-        })}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button id="add-lesson-editor" className="btn btn-outline btn-sm">+ Add Lesson</button>
-          <button id="filter-lessons" className="btn btn-outline btn-sm">🔽 Filter</button>
+                {warning && (
+                  <div style={{ color: '#ffcccc', fontSize: 10, lineHeight: 1.2, padding: '2px 4px', background: 'rgba(0,0,0,0.2)', borderRadius: 4 }}>
+                    ⚠️ {warning.reason}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button id="add-lesson-editor" className="btn btn-outline btn-sm">+ Add Lesson</button>
+            <button id="filter-lessons" className="btn btn-outline btn-sm">🔽 Filter</button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

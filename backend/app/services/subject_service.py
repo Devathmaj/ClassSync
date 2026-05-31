@@ -7,14 +7,21 @@ from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from app.models.subject import Subject
 from app.models.timetable_entities import TimetableSubject
+from app.models.user import User, RoleType
 from app.utils.csv_utils import parse_csv_bytes, generate_short_name
 
 
 # ── Global CRUD ──────────────────────────────────────────────────────────────
 
-def get_global_subjects(user_id: UUID, db: Session):
-    """Return all global subjects/activities belonging to this user."""
-    return db.query(Subject).filter(Subject.owner_id == user_id).order_by(Subject.name).all()
+def get_global_subjects(current_user: User, db: Session, institution_id: str = None):
+    """Return global subjects. Admins see all (or filtered), institutions see their own."""
+    query = db.query(Subject)
+    if current_user.role == RoleType.ADMIN:
+        if institution_id:
+            query = query.filter(Subject.owner_id == institution_id)
+    else:
+        query = query.filter(Subject.owner_id == current_user.id)
+    return query.order_by(Subject.name).all()
 
 def create_subject(user_id: UUID, payload_dict: dict, db: Session):
     """Create a new subject/activity in the global catalog."""

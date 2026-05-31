@@ -60,13 +60,19 @@ def _pair_key(slot: Slot) -> Tuple[str, int, int]:
     return (slot.day, slot.period_number, slot.week_number)
 
 
-def _constraint_maps(constraints: List[Constraint]) -> Tuple[Set[Tuple[UUID, UUID, Optional[UUID]]], Set[Tuple[UUID, UUID, Optional[UUID]]], Dict[Optional[UUID], Set[str]], Dict[UUID, Set[str]]]:
+def _constraint_maps(constraints: List[Constraint]) -> Tuple[Set[Tuple[UUID, UUID, Optional[UUID]]], Set[Tuple[UUID, UUID, Optional[UUID]]], Dict[Optional[UUID], Set[str]], Dict[UUID, Set[str]], Set[Tuple[Optional[UUID], Optional[UUID]]]]:
     must_follow: Set[Tuple[UUID, UUID, Optional[UUID]]] = set()
     not_same_day: Set[Tuple[UUID, UUID, Optional[UUID]]] = set()
     first_period_teachers: Dict[Optional[UUID], Set[str]] = {}
     specific_days: Dict[UUID, Set[str]] = {}
+    max_one_per_day: Set[Tuple[Optional[UUID], Optional[UUID]]] = set()
 
     for c in constraints:
+        if c.constraint_type == ConstraintType.MAX_ONE_PER_DAY:
+            scope_classroom = c.classroom_id if c.scope == ConstraintScope.CLASS else None
+            max_one_per_day.add((c.subject_a_id, scope_classroom))
+            continue
+            
         if c.constraint_type == ConstraintType.FIRST_PERIOD_CLASS_TEACHER:
             scope_classroom = c.classroom_id if c.scope == ConstraintScope.CLASS else None
             if scope_classroom not in first_period_teachers:
@@ -98,7 +104,7 @@ def _constraint_maps(constraints: List[Constraint]) -> Tuple[Set[Tuple[UUID, UUI
             not_same_day.add(pair)
             not_same_day.add(rev_pair)
 
-    return must_follow, not_same_day, first_period_teachers, specific_days
+    return must_follow, not_same_day, first_period_teachers, specific_days, max_one_per_day
 
 
 def _classroom_for_lesson(lesson: Lesson) -> Optional[UUID]:
@@ -129,7 +135,7 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
 
     import random
 
-    must_follow, same_day_exclusion, first_period_teachers, specific_days = _constraint_maps(constraints)
+    must_follow, same_day_exclusion, first_period_teachers, specific_days, max_one_per_day = _constraint_maps(constraints)
     classroom_teacher_map = {
         c.id: c.class_teacher_id for c in classrooms if c.class_teacher_id is not None
     }
@@ -186,6 +192,10 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
                     if subject_id in specific_days:
                         if slot.day not in specific_days[subject_id]:
                             return False, f"Subject constrained to specific days (not {slot.day})"
+                            
+                    if subject_id in day_subjects:
+                        if (subject_id, cid) in max_one_per_day or (subject_id, None) in max_one_per_day or (None, cid) in max_one_per_day or (None, None) in max_one_per_day:
+                            return False, "Max one per day constraint violated"
 
                     prev_subject = class_slot_subject.get((cid, slot.day, slot.week_number, slot.period_number - 1))
                     if prev_subject:
@@ -243,6 +253,40 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
                 ))
             return new_entries
 
+        def unreserve_group(slot: Slot, group: List[Lesson], candidate_room_id: Optional[UUID]):
+            key = _slot_key(slot)
+            for lesson in group:
+                classroom_id = _classroom_for_lesson(lesson)
+                lesson_faculty_ids = lesson.faculty_ids
+                subject_id = lesson.subject_ids[0] if lesson.subject_ids else None
+
+                if classroom_id and key in class_occ and classroom_id in class_occ[key]:
+                    class_occ[key].remove(classroom_id)
+                    if not class_occ[key]:
+                        del class_occ[key]
+
+                for fid in lesson_faculty_ids:
+                    if key in faculty_occ and fid in faculty_occ[key]:
+                        faculty_occ[key].remove(fid)
+                        if not faculty_occ[key]:
+                            del faculty_occ[key]
+
+                if candidate_room_id and key in room_occ and candidate_room_id in room_occ[key]:
+                    room_occ[key].remove(candidate_room_id)
+                    if not room_occ[key]:
+                        del room_occ[key]
+
+                if classroom_id and subject_id:
+                    day_key = (classroom_id, slot.day, slot.week_number)
+                    if day_key in class_subject_by_day and subject_id in class_subject_by_day[day_key]:
+                        class_subject_by_day[day_key].remove(subject_id)
+                        if not class_subject_by_day[day_key]:
+                            del class_subject_by_day[day_key]
+                    
+                    slot_key = (classroom_id, slot.day, slot.week_number, slot.period_number)
+                    if slot_key in class_slot_subject:
+                        del class_slot_subject[slot_key]
+
         # Class teacher first period placement pass
         entries: List[TimetableEntry] = []
         class_teacher_groups: Dict[UUID, List[List[Lesson]]] = {}
@@ -298,7 +342,13 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
             for i in range(remaining):
                 remaining_units.append((group, i))
 
-        def lesson_weight(item: Tuple[List[Lesson], int]) -> Tuple[int, int, int, int]:
+        # Pre-calculate faculty load
+        faculty_load: Dict[UUID, int] = {}
+        for l in lessons:
+            for fid in l.faculty_ids:
+                faculty_load[fid] = faculty_load.get(fid, 0) + l.periods_per_week
+                
+        def lesson_weight(item: Tuple[List[Lesson], int]) -> Tuple[int, int, int, int, int]:
             group = item[0]
             base_lesson = group[0]
             constrained = 0
@@ -308,15 +358,26 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
             faculty_count = len(set(f for l in group for f in l.faculty_ids))
             classroom_count = len(set(l.classroom_id for l in group if l.classroom_id))
             constrained += faculty_count + classroom_count
+            
+            max_fac_load = 0
+            fac_ids = [f for l in group for f in l.faculty_ids]
+            if fac_ids:
+                max_fac_load = max(faculty_load.get(f, 0) for f in fac_ids)
 
             # Day-restricted subjects have far fewer available slots and MUST be placed first
             day_restricted = 0
+            total_days = len(schedule.working_days)
             for l in group:
                 for sid in l.subject_ids:
                     if sid in specific_days:
                         allowed = len(specific_days[sid])
-                        total_days = len(schedule.working_days)
-                        day_restricted = max(day_restricted, total_days - allowed + 1)
+                        day_restricted += (total_days - allowed) * 10
+                    if (sid, l.classroom_id) in max_one_per_day or (sid, None) in max_one_per_day or (None, l.classroom_id) in max_one_per_day or (None, None) in max_one_per_day:
+                        slack = total_days - base_lesson.periods_per_week
+                        if slack <= 0:
+                            day_restricted += 50
+                        elif slack == 1:
+                            day_restricted += 20
                 
             is_class_teacher = 0
             for l in group:
@@ -324,11 +385,12 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
                     is_class_teacher = 1
                     break
                 
-            return (-day_restricted, -is_class_teacher, -constrained, -base_lesson.periods_per_week)
+            return (-day_restricted, -max_fac_load, -is_class_teacher, -constrained, -base_lesson.periods_per_week)
 
         remaining_units.sort(key=lesson_weight)
 
         attempt_warnings: List[dict] = []
+        unscheduled_groups = []
 
         for group, _ in remaining_units:
             base_lesson = group[0]
@@ -375,6 +437,7 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
                     break
                 if not placed:
                     attempt_warnings.append({"lesson_id": str(base_lesson.id), "reason": last_reason})
+                    unscheduled_groups.append(group)
                     continue
             else:
                 placed = False
@@ -401,7 +464,107 @@ def generate_entries_for_timetable(db: Session, timetable_id: UUID) -> Tuple[Lis
                     break
                 if not placed:
                     attempt_warnings.append({"lesson_id": str(base_lesson.id), "reason": last_reason})
+                    unscheduled_groups.append(group)
                     continue
+
+
+        
+
+
+
+        # MIN-CONFLICTS LOCAL SEARCH
+        if unscheduled_groups:
+            max_swaps = 1000
+            for _ in range(max_swaps):
+                if not unscheduled_groups:
+                    break
+                
+                u_group = unscheduled_groups.pop(0)
+                base_u_lesson = u_group[0]
+                if base_u_lesson.double_periods:
+                    attempt_warnings.append({"lesson_id": str(base_u_lesson.id), "reason": "Failed to place (Min-Conflicts skipped double period)"})
+                    continue
+                
+                # 1. TRY NORMAL PLACEMENT FIRST
+                placed_normally = False
+                candidate_slots = list(slots)
+                import random
+                random.shuffle(candidate_slots)
+                for slot in candidate_slots:
+                    found_room = False
+                    room_choice = None
+                    for rid in room_ids:
+                        ok, r = is_free_group(slot, u_group, rid)
+                        if ok:
+                            room_choice = rid
+                            found_room = True
+                            break
+                    if not found_room:
+                        ok, r = is_free_group(slot, u_group, None)
+                        if ok: found_room = True
+                    if found_room:
+                        entries.extend(reserve_group(slot, u_group, room_choice))
+                        placed_normally = True
+                        # Clean up previous warning for this lesson if present
+                        attempt_warnings = [w for w in attempt_warnings if w["lesson_id"] != str(base_u_lesson.id)]
+                        break
+                        
+                if placed_normally:
+                    continue
+                
+                # 2. SWAP
+                u_cid = _classroom_for_lesson(base_u_lesson)
+                if not u_cid:
+                    attempt_warnings.append({"lesson_id": str(base_u_lesson.id), "reason": "Failed to place"})
+                    continue
+                
+                c_entries = [e for e in entries if e.classroom_id == u_cid]
+                random.shuffle(c_entries)
+                
+                swapped = False
+                for c_entry in c_entries:
+                    s_lesson_id = c_entry.lesson_id
+                    s_group = None
+                    for g in lesson_groups:
+                        if g[0].id == s_lesson_id or (len(g) > 1 and any(l.id == s_lesson_id for l in g)):
+                            s_group = g
+                            break
+                            
+                    if not s_group or s_group[0].double_periods or len(s_group) > len(u_group):
+                        continue
+                        
+                    s_slot = next((s for s in slots if s.day == c_entry.day_of_week and s.period_number == c_entry.period_number and s.week_number == c_entry.week_number), None)
+                    if not s_slot: continue
+                    
+                    unreserve_group(s_slot, s_group, c_entry.room_id)
+                    s_lesson_ids = {l.id for l in s_group}
+                    entries = [e for e in entries if not (e.day_of_week == s_slot.day and e.period_number == s_slot.period_number and e.week_number == s_slot.week_number and e.lesson_id in s_lesson_ids)]
+                    
+                    ok, _ = is_free_group(s_slot, u_group, None)
+                    room_choice = None
+                    if not ok:
+                        for rid in room_ids:
+                            ok2, _ = is_free_group(s_slot, u_group, rid)
+                            if ok2:
+                                ok = True
+                                room_choice = rid
+                                break
+                    
+                    if ok:
+                        entries.extend(reserve_group(s_slot, u_group, room_choice))
+                        unscheduled_groups.append(s_group)
+                        swapped = True
+                        attempt_warnings = [w for w in attempt_warnings if w["lesson_id"] != str(base_u_lesson.id)]
+                        break
+                    else:
+                        entries.extend(reserve_group(s_slot, s_group, c_entry.room_id))
+                        
+                if not swapped:
+                    attempt_warnings.append({"lesson_id": str(base_u_lesson.id), "reason": "Local Search exhausted"})
+                    
+            for remaining_u in unscheduled_groups:
+                attempt_warnings.append({"lesson_id": str(remaining_u[0].id), "reason": "Max swaps reached"})
+
 
         # Check if this attempt is the best so far
         if len(entries) > best_placed:

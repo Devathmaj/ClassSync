@@ -7,13 +7,16 @@ export type TimetableStatus = 'draft' | 'published' | 'archived';
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type ScheduleType = 'weekly' | 'fortnightly' | 'custom_cycle' | 'day_rotation';
 export type PeriodConfigStyle = 'uniform' | 'custom_day';
-export type ConstraintType = 'subject_sequence' | 'same_day_exclusion' | 'faculty_constraint' | 'room_constraint' | 'first_period_class_teacher' | 'specific_days_subject';
+export type ConstraintType = 'subject_sequence' | 'same_day_exclusion' | 'faculty_constraint' | 'room_constraint' | 'first_period_class_teacher' | 'specific_days_subject' | 'max_one_per_day';
 export type ConstraintScope = 'institute' | 'class';
 
 export interface User {
   id: string;
-  email: string;
+  username: string;
+  email?: string;
   full_name: string;
+  role: string;
+  must_change_password: boolean;
   plan: PlanType;
   is_active: boolean;
   is_verified: boolean;
@@ -30,18 +33,20 @@ export interface AuthTokens {
 export interface Timetable {
   id: string;
   name: string;
-  description?: string;
+  description?: string | null;
   status: TimetableStatus;
-  session_name?: string;
-  session_start?: string;
+  session_name?: string | null;
+  session_start?: string | null;
   session_end?: string | null;
   generation_warnings?: Array<{ lesson_id: string; reason: string }> | null;
+  owner_id: string;
   created_at: string;
   updated_at: string;
 }
 
 export interface Faculty {
   id: string;
+  user_id?: string;
   full_name: string;
   short_name: string;
   email?: string;

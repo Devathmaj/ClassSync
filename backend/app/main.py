@@ -9,6 +9,7 @@ from app.database import Base, engine
 from app.middleware.logging import LoggingMiddleware
 from app.routes import (
     auth,
+    users,
     timetable,
     faculty,
     classroom,
@@ -36,6 +37,36 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
+@app.on_event("startup")
+def create_default_admin():
+    from app.database import SessionLocal
+    from app.models.user import User, RoleType
+    from app.utils.auth import hash_password
+    db = SessionLocal()
+    try:
+        admin_exists = db.query(User).filter(User.role == RoleType.ADMIN).first()
+        if not admin_exists:
+            admin = User(
+                username="admin",
+                hashed_password=hash_password("admin123"),
+                full_name="System Administrator",
+                role=RoleType.ADMIN,
+                must_change_password=True,
+            )
+            db.add(admin)
+            db.commit()
+    finally:
+        db.close()
+
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    import logging
+    logging.error(f"Validation error for request {request.url}: {exc}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors(), "body": exc.body})
+
 # Middleware
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -48,8 +79,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth & Users ──────────────────────────────────────────────────────────────
 app.include_router(auth.router, prefix=f"{settings.API_PREFIX}/auth", tags=["Auth"])
+app.include_router(users.router, prefix=f"{settings.API_PREFIX}/users", tags=["Users"])
 
 # ── Timetables (local entities) ───────────────────────────────────────────────
 app.include_router(timetable.router, prefix=f"{settings.API_PREFIX}/timetables", tags=["Timetables"])

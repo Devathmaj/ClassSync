@@ -14,6 +14,7 @@ class ConstraintType(str, enum.Enum):
     ROOM_CONSTRAINT = "room_constraint"
     FIRST_PERIOD_CLASS_TEACHER = "first_period_class_teacher"
     SPECIFIC_DAYS_SUBJECT = "specific_days_subject"
+    MAX_ONE_PER_DAY = "max_one_per_day"
 
 
 class ConstraintScope(str, enum.Enum):

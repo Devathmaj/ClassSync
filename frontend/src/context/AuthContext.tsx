@@ -6,8 +6,8 @@ import { authApi } from '../api';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, fullName: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  changeCredentials: (username: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -31,15 +31,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const data = await authApi.login(email, password);
+  const login = async (username: string, password: string) => {
+    const data = await authApi.login(username, password);
     localStorage.setItem('access_token', data.access_token);
     localStorage.setItem('refresh_token', data.refresh_token);
     setUser(data.user);
+    window.location.href = '/';
   };
 
-  const register = async (email: string, password: string, fullName: string) => {
-    const data = await authApi.register(email, password, fullName);
+  const changeCredentials = async (username: string, newPassword: string) => {
+    const data = await authApi.changeCredentials(username, newPassword);
     localStorage.setItem('access_token', data.access_token);
     localStorage.setItem('refresh_token', data.refresh_token);
     setUser(data.user);
@@ -51,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, changeCredentials, logout }}>
       {children}
     </AuthContext.Provider>
   );

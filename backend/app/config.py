@@ -25,10 +25,6 @@ class Settings(BaseSettings):
         "https://app.classsync.com",
     ]
 
-    # Redis / Celery
-    REDIS_URL: str = "redis://localhost:6379/0"
-    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
-    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
     # Plans
     FREE_PLAN_FACULTY_LIMIT: int = 10

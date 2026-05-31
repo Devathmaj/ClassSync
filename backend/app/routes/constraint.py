@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, RoleType
 from app.models.constraint import ConstraintType, ConstraintScope
 from app.utils.auth import get_current_user
 from app.services import constraint_service
@@ -58,6 +58,8 @@ def create_constraint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     return constraint_service.create_constraint(timetable_id, payload.dict(), db)
 
 
@@ -69,6 +71,8 @@ def update_constraint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         return constraint_service.update_constraint(timetable_id, constraint_id, payload.dict(exclude_unset=True), db)
     except ValueError as e:
@@ -81,6 +85,8 @@ def delete_constraint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if current_user.role == RoleType.FACULTY:
+        raise HTTPException(status_code=403, detail="Not authorized")
     try:
         constraint_service.delete_constraint(timetable_id, constraint_id, db)
     except ValueError as e:
